@@ -1,0 +1,4 @@
+# Bundle layer for @local/dsh-memory-decisions: inserts the plugin entry.
+- insert:
+    - id: dsh-memory-decisions
+      name: "@local/dsh-memory-decisions"

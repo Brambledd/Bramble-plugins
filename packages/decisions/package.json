@@ -1,0 +1,30 @@
+{
+  "name": "@local/dsh-memory-decisions",
+  "version": "0.1.0",
+  "description": "DSH memory plugin M2: decision cues — accepted decisions surface once at judgment points (per-turn injection), retire on supersede, budgeted.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cue-service": "./src/cue-service.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "check": "node --check index.js && node --check src/cue-service.js",
+    "test": "node --test test/cue-service.test.mjs test/plugin.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT"
+}
