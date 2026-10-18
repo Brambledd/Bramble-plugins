@@ -1,0 +1,20 @@
+{
+  "name": "@local/dsh-memory-events",
+  "version": "0.1.0",
+  "description": "DSH memory plugin M3b: temporal memory — idempotent event marking (source-coordinate hash), tombstone hard-forget with re-mark suppression, time-windowed search with half-life ranking.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./event-store": "./src/event-store.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["index.js", "src", "README.md"],
+  "scripts": {
+    "check": "node --check index.js && node --check src/event-store.js",
+    "test": "node --test test/event-store.test.mjs test/plugin.test.mjs"
+  },
+  "engines": { "node": ">=22.5.0" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "license": "MIT"
+}

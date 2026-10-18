@@ -1,0 +1,4 @@
+# Bundle layer for @local/dsh-memory-events: inserts the plugin entry.
+- insert:
+    - id: dsh-memory-events
+      name: "@local/dsh-memory-events"
