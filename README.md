@@ -2,7 +2,8 @@
 
 DSH（DeepSeek Harness）记忆插件套件——让你的 agent 拥有跨会话的持久记忆：记住做过的决策、沉淀踩过的教训、追踪时间线上的事件，并在合适的时机主动提醒。
 
-零原生依赖（Node 22.5+ 自带的 SQLite + FTS5），装进 profile 即用。
+零原生依赖（Node 22.5+ 自带的 SQLite + FTS5），npm 安装、零配置即用：
+**`dsh plugin --profile web add @brambledd/bramble-memory`**
 
 ## 装上之后 agent 能做什么
 
@@ -16,7 +17,21 @@ DSH（DeepSeek Harness）记忆插件套件——让你的 agent 拥有跨会话
 
 ## 快速开始
 
-### 一条命令安装（推荐）
+### 方式一：npm 安装（推荐，一条命令）
+
+```powershell
+dsh plugin --profile web add @brambledd/bramble-memory
+```
+
+也可以在 DSH Web 界面的 **Plugins** 页面搜索 `@brambledd/bramble-memory` 点安装。
+安装后自动启用，**零配置**——数据默认放在 `~/.dsh/memory/`，重启 DSH（或等待 HMR 生效）
+新开会话即可使用。
+
+[npm 包主页](https://www.npmjs.com/package/@brambledd/bramble-memory) · 要自定义数据目录或预算，在
+profile 的 `cordis.patch.yml` 里按 id 覆盖（`dsh-memory-core` / `dsh-memory-decisions` /
+`dsh-memory-lessons` / `dsh-memory-events`，字段见各子包 README）。
+
+### 方式二：从本仓库脚本安装（使用未发布的新改动）
 
 ```powershell
 git clone https://github.com/Brambledd/Bramble-plugins.git
@@ -29,12 +44,9 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 ```powershell
 powershell -File .\install.ps1 -Profile web              # 指定 profile
-powershell -File .\install.ps1 -DataDir D:\my-memory     # 指定数据目录（默认 ~/.dsh/memory）
+powershell -File .\install.ps1 -DataDir D:\my-memory     # 指定数据目录
 powershell -File .\uninstall.ps1                         # 一键卸载（数据保留）
 ```
-
-装完重启 DSH，新开会话即可使用（见下方"试试"）。知识文件目录默认在
-`~/.dsh/memory/knowledge`，格式见"放入你的知识文件"。
 
 <details>
 <summary>手动安装（不使用脚本时的完整步骤）</summary>
@@ -58,7 +70,8 @@ cmd /c mklink /J "$dshHome\profiles\my\node_modules\@local\dsh-memory-events" "E
 "@local/dsh-memory-lessons", "@local/dsh-memory-events"
 ```
 
-**3. 在 profile 的 `cordis.patch.yml` 末尾追加**（文件非空时先加一行 `---` 分隔）：
+**3.（可选）** 默认配置已内置（数据在 `~/.dsh/memory`）；如需自定义，在 profile 的
+`cordis.patch.yml` 末尾追加（文件非空时先加一行 `---` 分隔）：
 
 ```yaml
 - id: dsh-memory-core
