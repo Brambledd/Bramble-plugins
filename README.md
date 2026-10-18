@@ -16,9 +16,30 @@ DSH（DeepSeek Harness）记忆插件套件——让你的 agent 拥有跨会话
 
 ## 快速开始
 
-### 1. 安装插件包
+### 一条命令安装（推荐）
 
-把 `packages/` 下需要的包链接到你的 profile（以全部四个为例）：
+```powershell
+git clone https://github.com/Brambledd/Bramble-plugins.git
+cd Bramble-plugins
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+脚本自动完成：探测 profile → 备份现有配置 → 链接插件包 → 写入 bundles 与配置 →
+生成示例决策文件 → 静态验证。重复运行安全（幂等，已装部分自动跳过）。
+
+```powershell
+powershell -File .\install.ps1 -Profile web              # 指定 profile
+powershell -File .\install.ps1 -DataDir D:\my-memory     # 指定数据目录（默认 ~/.dsh/memory）
+powershell -File .\uninstall.ps1                         # 一键卸载（数据保留）
+```
+
+装完重启 DSH，新开会话即可使用（见下方"试试"）。知识文件目录默认在
+`~/.dsh/memory/knowledge`，格式见"放入你的知识文件"。
+
+<details>
+<summary>手动安装（不使用脚本时的完整步骤）</summary>
+
+**1. 链接插件包**到你的 profile：
 
 ```powershell
 # 假设仓库克隆到 E:\Bramble-plugins，profile 名为 my
@@ -30,29 +51,21 @@ cmd /c mklink /J "$dshHome\profiles\my\node_modules\@local\dsh-memory-lessons" "
 cmd /c mklink /J "$dshHome\profiles\my\node_modules\@local\dsh-memory-events" "E:\Bramble-plugins\packages\events"
 ```
 
-### 2. 配置 profile
-
-编辑 `~/.dsh/profiles/my/package.json`，在 `dsh.profile.bundles` 数组里追加四个插件名（保留原有条目）：
+**2. 编辑 profile 的 `package.json`**，在 `dsh.profile.bundles` 数组里追加（保留原有条目）：
 
 ```json
-"dsh": { "profile": { "bundles": [
-  "@deepseek-ai/dsh-base",
-  "@deepseek-ai/dsh-web-app",
-  "@local/dsh-memory-core",
-  "@local/dsh-memory-decisions",
-  "@local/dsh-memory-lessons",
-  "@local/dsh-memory-events"
-] } }
+"@local/dsh-memory-core", "@local/dsh-memory-decisions",
+"@local/dsh-memory-lessons", "@local/dsh-memory-events"
 ```
 
-在 profile 目录的 `cordis.patch.yml` 末尾追加配置：
+**3. 在 profile 的 `cordis.patch.yml` 末尾追加**（文件非空时先加一行 `---` 分隔）：
 
 ```yaml
 - id: dsh-memory-core
   name: "@local/dsh-memory-core"
   config:
     dbPath: E:/my-memory/evidence.sqlite      # 记忆索引（自动创建）
-    roots: [E:/my-memory/knowledge]           # 你的知识目录（自动创建扫描）
+    roots: [E:/my-memory/knowledge]           # 你的知识目录
     vector: { enabled: true }
 - id: dsh-memory-decisions
   name: "@local/dsh-memory-decisions"
@@ -73,12 +86,14 @@ cmd /c mklink /J "$dshHome\profiles\my\node_modules\@local\dsh-memory-events" "E
     dbPath: E:/my-memory/events.sqlite
 ```
 
-### 3. 放入你的知识文件
+</details>
 
-知识目录里放 markdown 文件，目录名决定类型：
+### 放入你的知识文件
+
+知识目录（默认 `~/.dsh/memory/knowledge`）里放 markdown 文件，目录名决定类型：
 
 ```
-E:/my-memory/knowledge/
+knowledge/
 ├─ decisions/ADR-001-数据库驱动选型.md   # 决策记录
 ├─ lessons/lesson-发布前要跑真实e2e.md   # 教训（也可以让 agent 提名生成）
 └─ notes/任意笔记.md
@@ -99,7 +114,7 @@ keywords: sqlite, 驱动
 （决策正文与理由）
 ```
 
-### 4. 重启，开聊
+### 重启，开聊
 
 重启 DSH 后新开会话，agent 即拥有下表的工具。试试：
 
