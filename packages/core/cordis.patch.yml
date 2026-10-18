@@ -1,0 +1,4 @@
+# Bundle layer for @local/dsh-memory-core: inserts the plugin entry.
+- insert:
+    - id: dsh-memory-core
+      name: "@local/dsh-memory-core"

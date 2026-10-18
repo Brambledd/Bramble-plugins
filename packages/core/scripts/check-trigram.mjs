@@ -1,0 +1,13 @@
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync(':memory:');
+db.exec("CREATE VIRTUAL TABLE t USING fts5(x, tokenize='trigram')");
+db.prepare('INSERT INTO t VALUES (?)').run('决策日志：我们选择 node:sqlite 作为证据库驱动');
+db.prepare('INSERT INTO t VALUES (?)').run('lessons learned about fts5 triggers');
+const zh = db.prepare('SELECT * FROM t WHERE t MATCH ?').all('决策');
+const en = db.prepare('SELECT * FROM t WHERE t MATCH ?').all('fts5');
+const zh2 = db.prepare('SELECT * FROM t WHERE t MATCH ?').all('证据库');
+console.log('决策 ->', zh.length, '| fts5 ->', en.length, '| 证据库 ->', zh2.length);
+const score = db.prepare('SELECT x, bm25(t) s FROM t WHERE t MATCH ?').all('sqlite');
+console.log('bm25 on trigram ok:', score.length);
+const pref = db.prepare('SELECT * FROM t WHERE t MATCH ?').all('trig*');
+console.log('prefix match ok:', pref.length);
