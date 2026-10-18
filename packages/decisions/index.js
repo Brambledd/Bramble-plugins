@@ -1,4 +1,4 @@
-// @local/dsh-memory-decisions — DSH plugin entry (M2: decision cues).
+// @local/dsh-memory-decisions 鈥?DSH plugin entry (M2: decision cues).
 //
 // Surfaces accepted decisions ONCE per revision at judgment points: on the
 // first step of each turn, the user's message text is searched against the
@@ -12,7 +12,10 @@
 // outgoing request, and the consumption ledger guarantees once-per-revision.
 import z from '@deepseek-ai/schemastery';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
-import { EvidenceStore } from '@local/dsh-memory-core/store';
+import { homedir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { mkdirSync } from 'node:fs';
+import { EvidenceStore } from '../core/src/store.js';
 import { createDecisionCueService, userTextOfTurn } from './src/cue-service.js';
 
 export const name = 'dsh-memory-decisions';
@@ -35,11 +38,11 @@ export const Config = z.object({
 
 function resolveConfig(config) {
   const cfg = config ?? {};
-  if (typeof cfg.dbPath !== 'string' || cfg.dbPath.length === 0) {
-    throw new Error('dsh-memory-decisions requires config `dbPath` (shared with dsh-memory-core)');
-  }
   return {
-    dbPath: cfg.dbPath,
+    dbPath:
+      typeof cfg.dbPath === 'string' && cfg.dbPath.length > 0
+        ? cfg.dbPath
+        : join(homedir(), '.dsh', 'memory', 'evidence.sqlite'),
     owner: typeof cfg.owner === 'string' && cfg.owner.length > 0 ? cfg.owner : 'default',
     perTurnMax: clampInt(cfg.perTurnMax, 0, 5, DEFAULTS.perTurnMax),
     dailyMax: clampInt(cfg.dailyMax, 0, 1000, DEFAULTS.dailyMax),
@@ -54,6 +57,7 @@ function clampInt(value, min, max, fallback) {
 
 export function apply(ctx, config) {
   const cfg = resolveConfig(config);
+  mkdirSync(dirname(cfg.dbPath), { recursive: true });
   const store = new EvidenceStore(cfg.dbPath);
   const service = createDecisionCueService(store, { owner: cfg.owner });
 
@@ -67,7 +71,7 @@ export function apply(ctx, config) {
   ctx.on('agent/pre-step', async ({ turn, step, signal }, next) => {
     const decision = await next();
     if (decision.kind === 'reject' || signal.aborted) return decision;
-    if (step !== 1) return decision; // judge at turn open only — never mid-turn
+    if (step !== 1) return decision; // judge at turn open only 鈥?never mid-turn
     const turnText = userTextOfTurn(decision.messages, name);
     if (turnText.length < DEFAULTS.minTurnChars) return decision;
     const { candidates, cueLine } = service.evaluateTurn({

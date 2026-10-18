@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cp, mkdtemp, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { apply } from '../index.js';
@@ -120,9 +121,24 @@ test('apply with promptHint disabled injects no system prompt section', async ()
   }
 });
 
-test('apply without dbPath throws a configuration error', async () => {
-  const { ctx } = makeStubCtx();
-  assert.throws(() => apply(ctx, {}), /dbPath/);
+test('apply without config falls back to zero-config defaults (~/.dsh/memory)', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memory-defaults-'));
+  const prevHome = process.env.USERPROFILE;
+  process.env.USERPROFILE = dir; // redirect homedir() for the default-path derivation
+  const { ctx, tools, disposers } = makeStubCtx();
+  try {
+    apply(ctx, {});
+    await settle();
+    const stats = tools.find((t) => t.name === 'memory_stats');
+    const value = await stats.execute({});
+    assert.ok(value.total >= 0, 'default store opens and answers');
+    assert.ok(value.roots >= 1, 'default knowledge root is registered');
+    assert.ok(existsSync(join(dir, '.dsh', 'memory', 'evidence.sqlite')), 'default db created under redirected home');
+  } finally {
+    process.env.USERPROFILE = prevHome;
+    for (const d of disposers) d();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('disposal closes the store: later execute rejects', async () => {

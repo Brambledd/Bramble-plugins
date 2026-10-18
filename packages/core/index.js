@@ -8,7 +8,8 @@
 // And injects a single system-prompt hint line (no memory dumping).
 import z from '@deepseek-ai/schemastery';
 import { mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 import { EvidenceStore } from './src/store.js';
 import { indexRoot, rebuildAll } from './src/scanner.js';
 import { createEmbeddingBackend } from './src/embedding.js';
@@ -20,6 +21,11 @@ export const inject = ['tools', 'systemPrompt'];
 
 const DEFAULT_MAX_RESULTS = 8;
 const HARD_MAX_RESULTS = 20;
+
+/** Zero-config defaults: everything lives under ~/.dsh/memory by default. */
+export function defaultDataDir() {
+  return join(homedir(), '.dsh', 'memory');
+}
 
 /** Plugin configuration (all fields optional; resolved with defaults in apply). */
 export const Config = z.object({
@@ -44,10 +50,13 @@ const PROMPT_HINT =
 
 function resolveConfig(config) {
   const cfg = config ?? {};
-  if (typeof cfg.dbPath !== 'string' || cfg.dbPath.length === 0) {
-    throw new Error('dsh-memory-core requires config `dbPath` (SQLite evidence index path)');
-  }
-  const roots = Array.isArray(cfg.roots) ? cfg.roots.filter((r) => typeof r === 'string' && r.length > 0) : [];
+  const dbPath =
+    typeof cfg.dbPath === 'string' && cfg.dbPath.length > 0
+      ? cfg.dbPath
+      : join(defaultDataDir(), 'evidence.sqlite');
+  const roots = Array.isArray(cfg.roots)
+    ? cfg.roots.filter((r) => typeof r === 'string' && r.length > 0)
+    : [join(defaultDataDir(), 'knowledge')];
   const rawVector = typeof cfg.vector === 'object' && cfg.vector !== null ? cfg.vector : {};
   const vector = {
     ...rawVector,
@@ -55,7 +64,7 @@ function resolveConfig(config) {
     backfillBatch: clampInt(rawVector.backfillBatch, 0, 512, 64),
   };
   return {
-    dbPath: cfg.dbPath,
+    dbPath,
     roots,
     maxResults: clampInt(cfg.maxResults, 1, HARD_MAX_RESULTS, DEFAULT_MAX_RESULTS),
     reindexOnStart: cfg.reindexOnStart !== false,

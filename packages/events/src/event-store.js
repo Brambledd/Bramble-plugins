@@ -1,4 +1,4 @@
-// @local/dsh-memory-events — event store (truth side, dedicated DB).
+﻿// @local/dsh-memory-events 鈥?event store (truth side, dedicated DB).
 //
 // Transplanted from Clowder's EventMemoryStore (F227): events are a TYPED
 // truth-side sub-store, not a derived index. Semantics:
@@ -13,7 +13,7 @@
 //   flow of Clowder collapses to this composition in the single-user case).
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { computeRecencyDecay, ftsTerms, ftsQuote } from '@local/dsh-memory-core/util';
+import { computeRecencyDecay, ftsTerms, ftsQuote } from '../../core/src/util.js';
 
 export const EVENT_KINDS = ['commitment', 'outcome', 'observation', 'milestone', 'incident'];
 
@@ -78,7 +78,7 @@ function rowToEvent(row) {
   };
 }
 
-/** Hard cap on event detail text — events are one-line records, not documents. */
+/** Hard cap on event detail text 鈥?events are one-line records, not documents. */
 export const EVENT_DETAIL_MAX_CHARS = 10_000;
 
 export class EventStore {

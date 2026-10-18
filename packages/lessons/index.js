@@ -1,19 +1,21 @@
-// @local/dsh-memory-lessons — DSH plugin entry (M3a: lesson distillation).
+// @local/dsh-memory-lessons 鈥?DSH plugin entry (M3a: lesson distillation).
 //
 // Governance (Clowder discipline, single-user simplification):
 // - the AI may only NOMINATE lessons (pending candidates, redacted);
 // - materialization happens exclusively through lesson_approve, which the
 //   agent must call only after the user explicitly approved in the
-//   conversation — the prompt hint makes this contract model-visible;
+//   conversation 鈥?the prompt hint makes this contract model-visible;
 // - approved lessons materialize as markdown under the lessons root (files
 //   are the durable truth) and are indexed immediately so memory_search can
 //   find them in the same session.
 import z from '@deepseek-ai/schemastery';
-import { relative, resolve } from 'node:path';
+import { relative, resolve, join, dirname } from 'node:path';
+import { mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { LessonCandidateStore } from './src/candidate-store.js';
 import { redactSecrets } from './src/redactor.js';
-import { EvidenceStore } from '@local/dsh-memory-core/store';
-import { indexRoot } from '@local/dsh-memory-core/scanner';
+import { EvidenceStore } from '../core/src/store.js';
+import { indexRoot } from '../core/src/scanner.js';
 
 export const name = 'dsh-memory-lessons';
 
@@ -32,16 +34,23 @@ const PROMPT_HINT =
 
 function resolveConfig(config) {
   const cfg = config ?? {};
-  for (const key of ['dbPath', 'lessonsRoot', 'evidenceDbPath', 'evidenceRoot']) {
-    if (typeof cfg[key] !== 'string' || cfg[key].length === 0) {
-      throw new Error(`dsh-memory-lessons requires config \`${key}\``);
-    }
-  }
-  return { ...cfg, enabled: cfg.enabled !== false };
+  const dataDir = join(homedir(), '.dsh', 'memory');
+  const knowledge = join(dataDir, 'knowledge');
+  const str = (value, fallback) =>
+    typeof value === 'string' && value.length > 0 ? value : fallback;
+  return {
+    dbPath: str(cfg.dbPath, join(dataDir, 'lessons.sqlite')),
+    lessonsRoot: str(cfg.lessonsRoot, join(knowledge, 'lessons')),
+    evidenceDbPath: str(cfg.evidenceDbPath, join(dataDir, 'evidence.sqlite')),
+    evidenceRoot: str(cfg.evidenceRoot, knowledge),
+    enabled: cfg.enabled !== false,
+  };
 }
 
 export function apply(ctx, config) {
   const cfg = resolveConfig(config);
+  // The candidate queue lives in its own SQLite file; create its parent dir.
+  mkdirSync(dirname(cfg.dbPath), { recursive: true });
   const candidates = new LessonCandidateStore(cfg.dbPath);
   const evidence = new EvidenceStore(cfg.evidenceDbPath);
 
@@ -68,7 +77,7 @@ export function apply(ctx, config) {
   register({
     name: 'lesson_nominate',
     description:
-      'Nominate a reusable lesson for the shared memory (propose only — never writes memory). Provide a short title and the distilled lesson body. Secrets are redacted automatically. After nominating, tell the user and wait for their explicit approval before calling lesson_approve.',
+      'Nominate a reusable lesson for the shared memory (propose only 鈥?never writes memory). Provide a short title and the distilled lesson body. Secrets are redacted automatically. After nominating, tell the user and wait for their explicit approval before calling lesson_approve.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -82,7 +91,7 @@ export function apply(ctx, config) {
     output: {
       schema: { type: 'object', additionalProperties: true },
       render: (_args, value) => [
-        { type: 'text', text: value.error ? `lesson nominate failed: ${value.error}` : `lesson nominated (${value.candidateId}, pending user approval)${value.redactions > 0 ? ` — ${value.redactions} secret(s) redacted` : ''}` },
+        { type: 'text', text: value.error ? `lesson nominate failed: ${value.error}` : `lesson nominated (${value.candidateId}, pending user approval)${value.redactions > 0 ? ` 鈥?${value.redactions} secret(s) redacted` : ''}` },
       ],
     },
     execute(args) {

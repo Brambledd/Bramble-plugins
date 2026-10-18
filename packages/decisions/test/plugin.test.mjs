@@ -122,7 +122,17 @@ test('disabled config registers no listener', async () => {
   }
 });
 
-test('missing dbPath throws', async () => {
-  const { ctx } = makeStubCtx();
-  assert.throws(() => apply(ctx, {}), /dbPath/);
+test('missing dbPath falls back to the zero-config default store', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-decisions-defaults-'));
+  const prevHome = process.env.USERPROFILE;
+  process.env.USERPROFILE = dir;
+  const { ctx, listeners, disposers } = makeStubCtx();
+  try {
+    apply(ctx, {});
+    assert.ok((listeners.get('agent/pre-step') ?? []).length >= 1, 'listener registered with default store');
+  } finally {
+    process.env.USERPROFILE = prevHome;
+    for (const d of disposers) d();
+    await rm(dir, { recursive: true, force: true });
+  }
 });

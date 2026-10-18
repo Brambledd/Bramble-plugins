@@ -1,0 +1,42 @@
+{
+  "name": "@brambledd/bramble-memory",
+  "version": "0.1.0",
+  "description": "Persistent memory plugin suite for DeepSeek Harness: cross-session evidence store, decision cues, lesson distillation, temporal events. Zero config, zero native dependencies.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Brambledd/Bramble-plugins.git"
+  },
+  "exports": {
+    "./plugins/core": "./plugins/core/index.js",
+    "./plugins/decisions": "./plugins/decisions/index.js",
+    "./plugins/lessons": "./plugins/lessons/index.js",
+    "./plugins/events": "./plugins/events/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "plugins",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.5",
+    "@deepseek-ai/dsh-llm": "^0.0.1-rc.1"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "memory",
+    "agent",
+    "sqlite"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+ }
+}

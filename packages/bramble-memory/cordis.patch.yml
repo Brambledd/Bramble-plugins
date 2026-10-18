@@ -1,0 +1,12 @@
+# Bundle layer for @brambledd/bramble-memory: inserts the four plugin rows.
+# Zero-config: every plugin falls back to ~/.dsh/memory defaults. Override
+# any of them through your profile patch by id.
+- insert:
+    - id: dsh-memory-core
+      name: "@brambledd/bramble-memory/plugins/core"
+    - id: dsh-memory-decisions
+      name: "@brambledd/bramble-memory/plugins/decisions"
+    - id: dsh-memory-lessons
+      name: "@brambledd/bramble-memory/plugins/lessons"
+    - id: dsh-memory-events
+      name: "@brambledd/bramble-memory/plugins/events"

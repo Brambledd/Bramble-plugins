@@ -1,4 +1,4 @@
-// Plugin-level test: the full nomination → approve → searchable-in-evidence
+﻿// Plugin-level test: the full nomination 鈫?approve 鈫?searchable-in-evidence
 // loop runs against a stub Cordis context with real fixtures.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -6,8 +6,8 @@ import { cp, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { apply } from '../index.js';
-import { EvidenceStore } from '@local/dsh-memory-core/store';
-import { indexRoot } from '@local/dsh-memory-core/scanner';
+import { EvidenceStore } from '../../core/src/store.js';
+import { indexRoot } from '../../core/src/scanner.js';
 
 function makeStubCtx() {
   const tools = [];
@@ -26,11 +26,11 @@ function makeStubCtx() {
   return { ctx, tools, sections, disposers };
 }
 
-test('nominate → approve → materialized lesson is immediately searchable', async () => {
+test('nominate 鈫?approve 鈫?materialized lesson is immediately searchable', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-mem-lessons-plugin-'));
   const knowledge = join(dir, 'knowledge');
   const lessonsRoot = join(knowledge, 'lessons');
-  await cp(new URL('../../dsh-memory/test/fixtures', import.meta.url), knowledge, { recursive: true });
+  await cp(new URL('../../core/test/fixtures', import.meta.url), knowledge, { recursive: true });
   {
     const evidence = new EvidenceStore(join(dir, 'evidence.sqlite'));
     await indexRoot(evidence, knowledge);

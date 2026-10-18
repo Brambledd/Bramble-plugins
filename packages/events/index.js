@@ -1,7 +1,8 @@
 // @local/dsh-memory-events — DSH plugin entry (M3b: temporal memory).
 import z from '@deepseek-ai/schemastery';
 import { mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 import { EventStore, EVENT_KINDS } from './src/event-store.js';
 
 export const name = 'dsh-memory-events';
@@ -18,10 +19,11 @@ const PROMPT_HINT =
 
 function resolveConfig(config) {
   const cfg = config ?? {};
-  if (typeof cfg.dbPath !== 'string' || cfg.dbPath.length === 0) {
-    throw new Error('dsh-memory-events requires config `dbPath`');
-  }
-  return { dbPath: cfg.dbPath, enabled: cfg.enabled !== false };
+  const dbPath =
+    typeof cfg.dbPath === 'string' && cfg.dbPath.length > 0
+      ? cfg.dbPath
+      : join(homedir(), '.dsh', 'memory', 'events.sqlite');
+  return { dbPath, enabled: cfg.enabled !== false };
 }
 
 export function apply(ctx, config) {
