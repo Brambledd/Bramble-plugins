@@ -92,6 +92,11 @@ export function apply(ctx, config) {
       if (redactedLesson.text.trim().length < 10) {
         return { error: 'lesson_too_short' };
       }
+      // Bound materialized truth: lessons are distilled rules, not documents.
+      const LESSON_MAX_CHARS = 8000;
+      if (redactedLesson.text.length > LESSON_MAX_CHARS) {
+        return { error: 'lesson_too_long', maxChars: LESSON_MAX_CHARS };
+      }
       const candidate = candidates.nominate({
         title: redactedTitle.text,
         lesson: redactedLesson.text,

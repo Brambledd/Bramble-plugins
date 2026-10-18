@@ -78,10 +78,14 @@ function rowToEvent(row) {
   };
 }
 
+/** Hard cap on event detail text — events are one-line records, not documents. */
+export const EVENT_DETAIL_MAX_CHARS = 10_000;
+
 export class EventStore {
   constructor(dbPath) {
     this.db = new DatabaseSync(dbPath);
     this.db.exec('PRAGMA journal_mode = WAL;');
+    this.db.exec('PRAGMA journal_size_limit = 67108864;');
     this.db.exec(SCHEMA);
     for (const stmt of FTS_TRIGGERS) this.db.exec(stmt);
   }
@@ -102,12 +106,17 @@ export class EventStore {
     const now = new Date().toISOString();
     const existing = this.db.prepare('SELECT * FROM events WHERE event_key = ?').get(eventKey);
     if (existing) return { event: rowToEvent(existing), inserted: false };
+    // Bound storage and context: event details are capped, not document stores.
+    const boundedDetail =
+      typeof detail === 'string' && detail.length > EVENT_DETAIL_MAX_CHARS
+        ? detail.slice(0, EVENT_DETAIL_MAX_CHARS)
+        : detail;
     this.db
       .prepare(
         `INSERT INTO events (event_key, kind, title, detail, status, occurred_at, due_at, source_key, source_note, created_at, updated_at)
          VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)`,
       )
-      .run(eventKey, kind, title, detail, occurredAt, dueAt, sourceKey, sourceNote, now, now);
+      .run(eventKey, kind, title, boundedDetail, occurredAt, dueAt, sourceKey, sourceNote, now, now);
     return { event: rowToEvent(this.db.prepare('SELECT * FROM events WHERE event_key = ?').get(eventKey)), inserted: true };
   }
 

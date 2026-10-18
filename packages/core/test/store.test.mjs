@@ -164,6 +164,8 @@ test('drill: revision-verified reads fail closed on every drift mode', async () 
     const ok = await ws.store.drill({ anchor: 'ADR-001', expectedRevision: adr1.revision });
     assert.equal(ok.status, 'ok');
     assert.match(ok.content, /node:sqlite/);
+    assert.equal(ok.truncated, false);
+    assert.equal(ok.totalChars, ok.content.length);
     assert.equal(
       ws.store.hasConsumedRevision({
         owner: 'default',
@@ -174,6 +176,13 @@ test('drill: revision-verified reads fail closed on every drift mode', async () 
       true,
       'successful drill must record a drill-family consumption row',
     );
+
+    // context bound: oversized sources are truncated with an explicit flag
+    const small = await ws.store.drill({ anchor: 'ADR-001', maxChars: 50 });
+    assert.equal(small.status, 'ok');
+    assert.equal(small.truncated, true);
+    assert.equal(small.content.length, 50);
+    assert.ok(small.totalChars > 50, 'totalChars reports the real length');
 
     // stale expectedRevision
     const stale = await ws.store.drill({ anchor: 'ADR-001', expectedRevision: 'deadbeef' });

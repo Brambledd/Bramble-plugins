@@ -324,13 +324,16 @@ export class EvidenceStore {
 
   /**
    * 回源校验 read: re-hash the source file and only serve content when it
-   * still matches the indexed revision.
+   * still matches the indexed revision. Content is truncated at `maxChars`
+   * (default 8000) to bound context consumption; `truncated` flags it and
+   * `totalChars` reports the full length so callers know to read the source
+   * file directly for more.
    * @returns {Promise<
-   *   | {status:'ok', anchor:string, revision:string, kind:string, docStatus:string, title:string, content:string}
+   *   | {status:'ok', anchor:string, revision:string, kind:string, docStatus:string, title:string, content:string, truncated:boolean, totalChars:number}
    *   | {status:'not_available', anchor:string, invalidationReason:
    *       'not_found'|'no_source'|'source_missing'|'source_modified'|'stale_revision'|'inactive'}>
    */
-  async drill({ anchor, expectedRevision }) {
+  async drill({ anchor, expectedRevision, maxChars = 8000 }) {
     const item = this.getByAnchor(anchor);
     if (!item) {
       return { status: 'not_available', anchor, invalidationReason: 'not_found' };
@@ -369,6 +372,9 @@ export class EvidenceStore {
       sourceRevision: item.revision,
       terminal: 'drilled',
     });
+    const totalChars = content.length;
+    const cap = Number.isFinite(maxChars) && maxChars > 0 ? Math.floor(maxChars) : totalChars;
+    const truncated = totalChars > cap;
     return {
       status: 'ok',
       anchor,
@@ -376,7 +382,9 @@ export class EvidenceStore {
       kind: item.kind,
       docStatus: item.status,
       title: item.title,
-      content,
+      content: truncated ? content.slice(0, cap) : content,
+      truncated,
+      totalChars,
     };
   }
 

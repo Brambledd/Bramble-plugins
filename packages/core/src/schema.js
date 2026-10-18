@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS evidence_vectors (
 
 const PRAGMAS = `
 PRAGMA journal_mode = WAL;
+PRAGMA journal_size_limit = 67108864;
 PRAGMA busy_timeout = 5000;
 `;
 

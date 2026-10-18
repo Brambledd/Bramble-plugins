@@ -109,6 +109,8 @@ const drillOutputSchema = {
     docStatus: { type: 'string' },
     title: { type: 'string' },
     content: { type: 'string' },
+    truncated: { type: 'boolean' },
+    totalChars: { type: 'integer' },
     invalidationReason: { type: 'string' },
   },
 };
@@ -260,6 +262,10 @@ export function apply(ctx, config) {
             description:
               'Revision from memory_search — the full 64-char hex hash (an 8+ char unambiguous prefix is also accepted). A mismatch fails closed with invalidationReason instead of returning stale content.',
           },
+          maxChars: {
+            type: 'integer',
+            description: 'Content cap in characters (default 8000, max 50000). Oversized documents return truncated=true with totalChars — read the source file directly if you need more.',
+          },
         },
       },
       output: {
@@ -269,12 +275,16 @@ export function apply(ctx, config) {
             type: 'text',
             text:
               value.status === 'ok'
-                ? `memory ${value.anchor} @${value.revision} (${value.kind}/${value.docStatus}):\n${value.content}`
+                ? `memory ${value.anchor} @${value.revision} (${value.kind}/${value.docStatus})${value.truncated ? ` [truncated ${value.content.length}/${value.totalChars} chars]` : ''}:\n${value.content}`
                 : `memory ${value.anchor} unavailable: ${value.invalidationReason}`,
           },
         ],
       },
       execute(args) {
+        const max =
+          Number.isFinite(args.maxChars) && args.maxChars > 0
+            ? Math.min(50_000, Math.floor(args.maxChars))
+            : undefined;
         return withStore((store) =>
           store.drill({
             anchor: String(args.anchor ?? ''),
@@ -282,6 +292,7 @@ export function apply(ctx, config) {
               typeof args.expectedRevision === 'string' && args.expectedRevision.length > 0
                 ? args.expectedRevision
                 : undefined,
+            maxChars: max,
           }),
         );
       },
