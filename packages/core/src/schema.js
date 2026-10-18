@@ -9,7 +9,7 @@
 import { DatabaseSync } from 'node:sqlite';
 
 /** Schema version of the derived evidence index. Never reuse a number. */
-export const EVIDENCE_SCHEMA_VERSION = 1;
+export const EVIDENCE_SCHEMA_VERSION = 2;
 
 /** Application id guarding this database family ('MEM1'). */
 export const EVIDENCE_APPLICATION_ID = 0x4d454d31;
@@ -67,6 +67,18 @@ CREATE TABLE IF NOT EXISTS cue_episodes (
 CREATE TABLE IF NOT EXISTS indexed_roots (
   root TEXT PRIMARY KEY,
   kind_hint TEXT
+);
+`;
+
+// V2: vector lane (BLOB embeddings keyed by anchor + revision).
+export const VECTOR_SCHEMA = `
+CREATE TABLE IF NOT EXISTS evidence_vectors (
+  anchor TEXT PRIMARY KEY,
+  revision TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dims INTEGER NOT NULL,
+  vec BLOB NOT NULL,
+  updated_at TEXT NOT NULL
 );
 `;
 
@@ -153,4 +165,5 @@ export function applySchema(db) {
   db.exec(FTS_SCHEMA);
   for (const stmt of FTS_TRIGGERS) db.exec(stmt);
   db.exec(LEDGER_SCHEMA);
+  db.exec(VECTOR_SCHEMA);
 }

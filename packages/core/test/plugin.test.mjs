@@ -79,7 +79,7 @@ test('apply registers memory tools and prompt hint; execute paths work', async (
     assert.ok(row, 'ADR-001 must be findable');
     assert.equal(row.kind, 'decision');
     assert.equal(row.active, true);
-    assert.match(hit.matchMode, /"/);
+    assert.match(hit.matchMode, /^(fts|hybrid:fts\+vec|like-fallback)$/);
 
     // drill execute: ok + fail-closed
     const ok = await drill.execute({ anchor: 'ADR-001', expectedRevision: row.revision });

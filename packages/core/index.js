@@ -11,6 +11,7 @@ import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { EvidenceStore } from './src/store.js';
 import { indexRoot, rebuildAll } from './src/scanner.js';
+import { createEmbeddingBackend } from './src/embedding.js';
 import { EVIDENCE_KINDS, INACTIVE_STATUSES } from './src/util.js';
 
 export const name = 'dsh-memory-core';
@@ -27,6 +28,15 @@ export const Config = z.object({
   maxResults: z.number().description('Default result limit for memory_search.'),
   reindexOnStart: z.boolean().description('Rescan configured roots at startup.'),
   promptHint: z.boolean().description('Inject the one-line memory-availability system prompt hint.'),
+  vector: z.object({
+    enabled: z.boolean().description('Enable the vector lane (hybrid RRF search).'),
+    backend: z.string().description("Embedding backend: 'hash' (default, deterministic, offline) or 'openai' (OpenAI-compatible endpoint)."),
+    baseUrl: z.string().description('openai backend: base URL of the embeddings endpoint.'),
+    apiKeyEnv: z.string().description('openai backend: environment variable holding the API key.'),
+    model: z.string().description('openai backend: embedding model id.'),
+    dimensions: z.number().description('Vector dimensions (hash backend default 256).'),
+    backfillBatch: z.number().description('How many documents to embed per startup backfill batch.'),
+  }).description('Vector lane configuration.'),
 });
 
 const PROMPT_HINT =
@@ -38,13 +48,19 @@ function resolveConfig(config) {
     throw new Error('dsh-memory-core requires config `dbPath` (SQLite evidence index path)');
   }
   const roots = Array.isArray(cfg.roots) ? cfg.roots.filter((r) => typeof r === 'string' && r.length > 0) : [];
-  const maxResults = clampInt(cfg.maxResults, 1, HARD_MAX_RESULTS, DEFAULT_MAX_RESULTS);
+  const rawVector = typeof cfg.vector === 'object' && cfg.vector !== null ? cfg.vector : {};
+  const vector = {
+    ...rawVector,
+    enabled: rawVector.enabled !== false,
+    backfillBatch: clampInt(rawVector.backfillBatch, 0, 512, 64),
+  };
   return {
     dbPath: cfg.dbPath,
     roots,
-    maxResults,
+    maxResults: clampInt(cfg.maxResults, 1, HARD_MAX_RESULTS, DEFAULT_MAX_RESULTS),
     reindexOnStart: cfg.reindexOnStart !== false,
     promptHint: cfg.promptHint !== false,
+    vector,
   };
 }
 
@@ -110,6 +126,23 @@ export function apply(ctx, config) {
         });
       }
     }
+    // Vector lane: attach the backend, then backfill missing embeddings in
+    // bounded batches (best effort — search degrades to BM25 without them).
+    const embedding = createEmbeddingBackend(cfg.vector);
+    if (embedding) {
+      store.attachEmbedding(embedding);
+      let budget = cfg.vector.backfillBatch;
+      while (budget > 0) {
+        const result = await store
+          .embedBackfill({ batchSize: Math.min(32, budget) })
+          .catch((error) => {
+            ctx.logger?.warn?.(`memory-core: vector backfill failed: ${error.message}`);
+            return { embedded: 0 };
+          });
+        if (result.embedded === 0) break;
+        budget -= result.embedded;
+      }
+    }
     return store;
   })();
 
@@ -164,40 +197,40 @@ export function apply(ctx, config) {
           {
             type: 'text',
             text:
-              value.results.length === 0
-                ? 'memory: no evidence matched.'
+              `memory search [${value.matchMode}]:\n` +
+              (value.results.length === 0
+                ? '  no evidence matched.'
                 : value.results
                     .map(
                       (r) =>
                         `- [${r.kind}] ${r.title} (${r.anchor} @${r.revision}${r.active ? '' : ' [inactive]'})${r.summary ? ` — ${r.summary}` : ''}`,
                     )
-                    .join('\n'),
+                    .join('\n')),
           },
         ],
       },
       execute(args) {
         return withStore((store) => {
           const limit = clampInt(args.limit, 1, HARD_MAX_RESULTS, cfg.maxResults);
-          const { items, matchMode } = store.search({
+          return store.searchHybrid({
             query: args.query,
             kinds: args.kinds,
             limit,
           });
-          return {
-            matchMode: matchMode ?? 'none',
-            results: items.map((item) => ({
-              anchor: item.anchor,
-              title: item.title,
-              kind: item.kind,
-              status: item.status,
-              revision: item.revision ?? '',
-              sourcePath: item.sourcePath ?? '',
-              summary: item.summary ?? '',
-              supersededBy: item.supersededBy ?? '',
-              active: !INACTIVE_STATUSES.has(item.status) && !item.supersededBy,
-            })),
-          };
-        });
+        }).then(({ items, matchMode }) => ({
+          matchMode: matchMode ?? 'none',
+          results: items.map((item) => ({
+            anchor: item.anchor,
+            title: item.title,
+            kind: item.kind,
+            status: item.status,
+            revision: item.revision ?? '',
+            sourcePath: item.sourcePath ?? '',
+            summary: item.summary ?? '',
+            supersededBy: item.supersededBy ?? '',
+            active: !INACTIVE_STATUSES.has(item.status) && !item.supersededBy,
+          })),
+        }));
       },
       presentCall: (args) => ({
         card: 'generic',

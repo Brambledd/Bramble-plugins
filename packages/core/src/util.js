@@ -88,6 +88,15 @@ export function ftsTerms(query) {
     .map((t) => t.replace(/["*()]/g, ''));
 }
 
+/**
+ * CJK detection for the hybrid-rank boost, transplanted from Clowder's
+ * CJK_NN_WEIGHT rationale: BM25/FTS recall is weak for Chinese text, so the
+ * vector lane gets a higher fusion weight for CJK queries.
+ */
+export function hasCJKCharacters(text) {
+  return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(text);
+}
+
 export const EVIDENCE_KINDS = ['decision', 'lesson', 'note', 'event', 'person', 'project'];
 export const EVIDENCE_STATUSES = [
   'active',

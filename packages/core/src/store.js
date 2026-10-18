@@ -9,6 +9,8 @@
 //   stale content.
 import { readFile } from 'node:fs/promises';
 import { openEvidenceDatabase, EVIDENCE_SCHEMA_VERSION } from './schema.js';
+import { VectorStore } from './vector-store.js';
+import { cosine } from './embedding.js';
 import {
   computeRevision,
   nowIso,
@@ -16,6 +18,7 @@ import {
   ftsQuote,
   INACTIVE_STATUSES,
   computeRecencyDecay,
+  hasCJKCharacters,
 } from './util.js';
 
 /** @typedef {{anchor:string, kind:string, status:string, authority:string, title:string, summary:string|null, keywords:string[], sourcePath:string|null, revision:string|null, supersededBy:string|null, updatedAt:string}} EvidenceItem */
@@ -59,6 +62,19 @@ export class EvidenceStore {
     this.db = db;
     this.schemaVersion = EVIDENCE_SCHEMA_VERSION;
     this.resetOnOpen = reset;
+    this.vectors = new VectorStore(this);
+    /** Optional embedding backend for the vector lane (set via attachEmbedding). */
+    this.embedding = null;
+    /** Embedding text projection: how a document becomes model input. */
+    this.embeddingText = (item) => `${item.title}\n${item.summary ?? ''}\n${item.keywords.join(' ')}`;
+    /** Async recompute queue guards (lazy backfill on search). */
+    this._backfillInFlight = new Set();
+  }
+
+  /** Attach an embedding backend; enables the hybrid vector lane. */
+  attachEmbedding(backend, { embeddingText } = {}) {
+    this.embedding = backend;
+    if (typeof embeddingText === 'function') this.embeddingText = embeddingText;
   }
 
   close() {
@@ -128,42 +144,106 @@ export class EvidenceStore {
   }
 
   /**
-   * Full-text search over the evidence index (BM25, trigram tokenizer), with
-   * inactive/superseded rows demoted to the tail and a Clowder-style
-   * fractional recency decay folded into ranking (`T/(T+age)` per kind).
-   * A final LIKE fallback phase covers sub-trigram CJK terms.
+   * Hybrid search: BM25 (trigram FTS5) fused with the vector lane via RRF
+   * (k=60). CJK queries weight the vector lane ×1.5 (Clowder CJK_NN_WEIGHT
+   * rationale). Fused scores get the recency-decay penalty; results are
+   * MMR-reranked for diversity when fresh vectors exist; inactive/superseded
+   * rows are demoted. A final LIKE fallback covers sub-trigram CJK terms.
+   *
+   * The vector lane participates only when an embedding backend is attached
+   * and fresh (revision-matching) vectors exist; otherwise this degrades
+   * gracefully to the pure BM25 pipeline.
    * @returns {{items: EvidenceItem[], scores: number[], matchMode: string|null}}
    */
-  search({ query, kinds, limit = 8, includeInactive = false, recencyDecay = true }) {
+  /**
+   * Synchronous search. When the attached backend supports synchronous
+   * embedding (`embedOne`, e.g. the default hash backend) the vector lane
+   * participates; async backends (OpenAI-compatible) use searchHybrid().
+   */
+  search(options) {
+    const query = options?.query ?? '';
+    let queryVec = null;
+    if (this.embedding && typeof this.embedding.embedOne === 'function') {
+      try {
+        queryVec = this.embedding.embedOne(query);
+      } catch {
+        queryVec = null;
+      }
+    }
+    return this.runHybrid({ ...options, queryVec });
+  }
+
+  /** Async search for async embedding backends (OpenAI-compatible). */
+  async searchHybrid(options) {
+    const query = options?.query ?? '';
+    let queryVec = null;
+    if (this.embedding) {
+      try {
+        const vecs = await this.embedding.embed([query]);
+        queryVec = vecs[0] ?? null;
+      } catch {
+        queryVec = null;
+      }
+    }
+    return this.runHybrid({ ...options, queryVec });
+  }
+
+  /** Shared hybrid pipeline: RRF fusion -> decay -> demote -> MMR. */
+  runHybrid({ query, queryVec, kinds, limit = 8, includeInactive = false, recencyDecay = true }) {
     const kindSet = Array.isArray(kinds) && kinds.length > 0 ? new Set(kinds) : null;
-    const finalize = (rows, matchMode) => {
-      let items = rows.map((r) => ({ row: r, item: rowToItem(r) }));
-      if (kindSet) items = items.filter((x) => kindSet.has(x.item.kind));
-      if (recencyDecay) {
-        const now = Date.now();
-        for (const entry of items) {
-          const decay = computeRecencyDecay(entry.item.updatedAt, entry.item.kind, now);
-          // bm25 is lower-is-better; a log penalty keeps ranking smooth and
-          // monotonic without letting decay dominate lexical relevance.
-          entry.row.score = (entry.row.score ?? 0) - Math.log(decay);
-        }
-        items.sort((a, b) => (a.row.score ?? 0) - (b.row.score ?? 0));
+    const fts = this.ftsCandidates(query);
+    const ftsItems = fts.items.filter((i) => !kindSet || kindSet.has(i.kind));
+    // Resolve vector hits to full items BEFORE fusing — vec-only hits (the
+    // cross-vocabulary gap the vector lane exists for) must survive fusion.
+    let vecItems = [];
+    if (queryVec) {
+      for (const hit of this.vectors.knn(queryVec, { model: this.embedding?.model, limit: 50 })) {
+        const item = this.getByAnchor(hit.anchor);
+        if (!item) continue;
+        if (kindSet && !kindSet.has(item.kind)) continue;
+        vecItems.push(item);
       }
-      if (!includeInactive) {
-        // Stable partition: active rows first, inactive demoted (not hidden).
-        items.sort(
-          (a, b) =>
-            Number(isInactive(a.item) || Boolean(a.item.supersededBy)) -
-            Number(isInactive(b.item) || Boolean(b.item.supersededBy)),
-        );
+    }
+    const mode =
+      vecItems.length > 0
+        ? 'hybrid:fts+vec'
+        : ftsItems.length > 0
+          ? fts.viaLike
+            ? 'like-fallback'
+            : 'fts'
+          : null;
+    const scored = rrfFuse(ftsItems, vecItems, { cjkBoost: hasCJKCharacters(query) });
+    if (recencyDecay) {
+      const now = Date.now();
+      for (const entry of scored) {
+        // RRF scores are higher-is-better; decay ∈ (0,1] so its log is a
+        // negative bonus — stale rows sink without dominating lexical rank.
+        entry.score += Math.log(computeRecencyDecay(entry.item.updatedAt, entry.item.kind, now));
       }
-      const sliced = items.slice(0, Math.max(1, limit));
-      return {
-        items: sliced.map((x) => x.item),
-        scores: sliced.map((x) => x.row.score ?? 0),
-        matchMode,
-      };
+      scored.sort((a, b) => b.score - a.score);
+    }
+    if (!includeInactive) {
+      scored.sort(
+        (a, b) =>
+          Number(isInactive(a.item) || Boolean(a.item.supersededBy)) -
+          Number(isInactive(b.item) || Boolean(b.item.supersededBy)),
+      );
+    }
+    let top = scored.slice(0, Math.max(1, limit));
+    if (this.embedding && vecItems.length > 0 && top.length > 2) {
+      top = mmrRerank(top, {
+        vectorsFor: (item) => this.vectors.freshFor(item.anchor, item.revision),
+      });
+    }
+    return {
+      items: top.map((t) => t.item),
+      scores: top.map((t) => t.score),
+      matchMode: mode,
     };
+  }
+
+  /** BM25 candidates as {items, viaLike} in rank order. */
+  ftsCandidates(query) {
     for (const match of buildMatchCandidates(query)) {
       let rows;
       try {
@@ -176,9 +256,11 @@ export class EvidenceStore {
           )
           .all(match);
       } catch {
-        continue; // malformed MATCH fallback — try the next strategy
+        continue;
       }
-      if (rows.length > 0) return finalize(rows, match);
+      if (rows.length > 0) {
+        return { items: rows.map((r) => rowToItem(r)), viaLike: false };
+      }
     }
     // LIKE fallback: substring containment over the indexed text fields.
     const terms = ftsTerms(query);
@@ -188,9 +270,56 @@ export class EvidenceStore {
       const rows = this.db
         .prepare(`SELECT d.*, 0 AS score FROM evidence_docs d WHERE ${conditions} LIMIT 200`)
         .all(...params);
-      if (rows.length > 0) return finalize(rows, 'like-fallback');
+      if (rows.length > 0) return { items: rows.map((r) => rowToItem(r)), viaLike: true };
     }
-    return { items: [], scores: [], matchMode: null };
+    return { items: [], viaLike: false };
+  }
+
+  /**
+   * Vector candidates via an explicitly provided query vector (used by
+   * runHybrid). Kept for callers that pre-compute embeddings.
+   */
+  vectorCandidatesWith(queryVec) {
+    if (!queryVec) return [];
+    return this.vectors.knn(queryVec, { model: this.embedding?.model, limit: 50 });
+  }
+
+  /**
+   * Backfill/recompute embeddings for documents whose vector rows are
+   * missing or stale. Budgeted per call (batch size); safe to call from
+   * startup jobs or lazily after searches.
+   * @returns {Promise<{embedded: number, model: string}>}
+   */
+  async embedBackfill({ batchSize = 16 } = {}) {
+    if (!this.embedding) return { embedded: 0, model: null };
+    const rows = this.db
+      .prepare(
+        `SELECT d.anchor, d.source_hash FROM evidence_docs d
+         LEFT JOIN evidence_vectors v ON v.anchor = d.anchor AND v.revision = d.source_hash AND v.model = ?
+         WHERE v.anchor IS NULL`,
+      )
+      .all(this.embedding.model)
+      .slice(0, batchSize);
+    if (rows.length === 0) return { embedded: 0, model: this.embedding.model };
+    const texts = [];
+    for (const row of rows) {
+      const item = this.getByAnchor(row.anchor);
+      texts.push(this.embeddingText(item));
+    }
+    const vecs = await this.embedding.embed(texts);
+    let embedded = 0;
+    for (let i = 0; i < rows.length; i += 1) {
+      const vec = vecs[i];
+      if (!vec) continue;
+      this.vectors.put({
+        anchor: rows[i].anchor,
+        revision: rows[i].source_hash,
+        model: this.embedding.model,
+        vec,
+      });
+      embedded += 1;
+    }
+    return { embedded, model: this.embedding.model };
   }
 
   /**
@@ -288,10 +417,10 @@ export class EvidenceStore {
     return this.db.prepare('SELECT root, kind_hint FROM indexed_roots').all();
   }
 
-  /** Wipe the derived index (documents, FTS, ledger stays). Roots registry kept. */
+  /** Wipe the derived index (documents, FTS, vectors). Ledger and roots stay. */
   wipe() {
     this.db.exec('DELETE FROM evidence_docs;');
-    // content= external table: deleting all rows through triggers is enough.
+    this.db.exec('DELETE FROM evidence_vectors;');
     return true;
   }
 
@@ -311,6 +440,8 @@ export class EvidenceStore {
       cueEpisodes: cues,
       schemaVersion: this.schemaVersion,
       roots: this.listRoots().length,
+      vectors: this.vectors.stats(),
+      vectorBackend: this.embedding ? this.embedding.model : null,
     };
   }
 }
@@ -340,4 +471,68 @@ function revisionMatches(fullRevision, provided) {
 /** Escape LIKE wildcards inside a fallback term. */
 function escapeLike(term) {
   return term.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
+/**
+ * Reciprocal-rank fusion of the two lanes (higher score is better).
+ * ftsItems and vecItems are EvidenceItem[] arrays, each in its lane's rank
+ * order. Every lane contributes weight/(K + rank) per item it contains;
+ * K=60 is the standard RRF constant. CJK queries boost the vector lane by
+ * ×1.5 (Clowder CJK_NN_WEIGHT rationale). Items hit by only one lane keep
+ * that lane's contribution — vec-only hits are the cross-vocabulary wins.
+ * @returns {{item: EvidenceItem, score: number}[]} sorted by score desc
+ */
+export function rrfFuse(ftsItems, vecItems, { cjkBoost = false, k = 60 } = {}) {
+  const vecWeight = cjkBoost ? 1.5 : 1;
+  const byAnchor = new Map();
+  ftsItems.forEach((item, rank) => {
+    byAnchor.set(item.anchor, { item, score: 1 / (k + rank) });
+  });
+  vecItems.forEach((item, rank) => {
+    const existing = byAnchor.get(item.anchor);
+    const contribution = vecWeight / (k + rank);
+    if (existing) {
+      existing.score += contribution;
+    } else {
+      byAnchor.set(item.anchor, { item, score: contribution });
+    }
+  });
+  const list = [...byAnchor.values()];
+  list.sort((a, b) => b.score - a.score);
+  return list;
+}
+
+/**
+ * Maximal-marginal-relevance rerank for diversity: greedily pick the item
+ * maximizing λ·relevance - (1-λ)·max-similarity-to-already-picked, using
+ * fresh vectors. Items without vectors contribute zero similarity.
+ */
+export function mmrRerank(scored, { vectorsFor, lambda = 0.7 } = {}) {
+  const pool = scored.map((entry) => ({
+    ...entry,
+    relevance: entry.score,
+    vec: vectorsFor(entry.item)?.vec ?? null,
+  }));
+  const picked = [];
+  while (pool.length > 0) {
+    let bestIndex = 0;
+    let bestScore = -Infinity;
+    for (let i = 0; i < pool.length; i += 1) {
+      let maxSim = 0;
+      if (pool[i].vec) {
+        for (const p of picked) {
+          if (!p.vec) continue;
+          const sim = cosine(pool[i].vec, p.vec);
+          if (sim > maxSim) maxSim = sim;
+        }
+      }
+      const mmr = lambda * pool[i].relevance - (1 - lambda) * maxSim;
+      if (mmr > bestScore) {
+        bestScore = mmr;
+        bestIndex = i;
+      }
+    }
+    picked.push(pool.splice(bestIndex, 1)[0]);
+  }
+  return picked.map(({ item, score }) => ({ item, score }));
 }
