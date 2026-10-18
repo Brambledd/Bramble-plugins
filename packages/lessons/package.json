@@ -1,0 +1,21 @@
+{
+  "name": "@local/dsh-memory-lessons",
+  "version": "0.1.0",
+  "description": "DSH memory plugin M3a: lesson distillation — nominate (AI proposes, never writes truth), human-gated approve, materialize to markdown, immediate evidence indexing, secret redaction.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./candidate-store": "./src/candidate-store.js",
+    "./redactor": "./src/redactor.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["index.js", "src", "README.md"],
+  "scripts": {
+    "check": "node --check index.js && node --check src/candidate-store.js && node --check src/redactor.js",
+    "test": "node --test test/candidate-store.test.mjs test/plugin.test.mjs"
+  },
+  "engines": { "node": ">=22.5.0" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "license": "MIT"
+}

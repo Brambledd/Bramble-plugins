@@ -1,0 +1,4 @@
+# Bundle layer for @local/dsh-memory-lessons: inserts the plugin entry.
+- insert:
+    - id: dsh-memory-lessons
+      name: "@local/dsh-memory-lessons"
