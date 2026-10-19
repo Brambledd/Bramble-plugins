@@ -20,12 +20,19 @@ import os
 import re
 import subprocess
 import sys
+import time
+from datetime import datetime as _dt
 from pathlib import Path
 from typing import Any
 
 from bemula.baselines.base import MemoryAdapter
 from bemula.llm import BaseLLM
 from bemula.schemas import Turn
+
+
+def dateutil_parse(value: str):
+    """Lightweight ISO-8601 parse (stdlib only; no dateutil dependency)."""
+    return _dt.fromisoformat(str(value).replace("Z", "+00:00"))
 
 # Bridge location: sibling of this file by default, overridable for installs.
 _BRIDGE_DEFAULT = Path(__file__).resolve().parent / "bridge.mjs"
@@ -443,13 +450,36 @@ class BrambleAdapter(MemoryAdapter):
             probes.append(" ".join(words[-2:]))
         return {"scope": "facts", "targets": probes, "since": None, "until": None, "replacement": None}
 
+    _RECENT_WRITE_GUARD_S = 600  # entries written within 10 min are fresh
+    # relearning / F6-replacement values — never deletion candidates.
+
+    def _fresh_anchors(self) -> set[str]:
+        """Anchors written within the recent-write guard window — these are
+        relearning values or F6 replacements observed AFTER a deletion; they
+        must never re-enter the removal candidate set."""
+        rows = self.bridge.call("list").get("items", [])
+        cutoff = time.time() - self._RECENT_WRITE_GUARD_S
+        fresh = set()
+        for r in rows:
+            updated = r.get("updated_at")
+            if not updated:
+                continue
+            try:
+                if dateutil_parse(updated).timestamp() >= cutoff:
+                    fresh.add(r["anchor"])
+            except Exception:  # noqa: BLE001
+                continue
+        return fresh
+
     def _related_expansion(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """C2: pull in same-topic associates — entries whose keywords overlap
         a candidate by >=50% often hold another mention of the same fact
         (multi-mention facts are stored per turn). Expanded candidates still
         pass through LLM confirmation, so over-expansion cannot hurt
-        preservation by itself."""
+        preservation by itself. Fresh writes (relearning values, F6
+        replacements) are excluded from expansion."""
         rows = self.bridge.call("list").get("items", [])
+        fresh = self._fresh_anchors()
         by_anchor = {r["anchor"]: r for r in rows}
         cand_keys = {}
         for c in candidates:
@@ -458,7 +488,7 @@ class BrambleAdapter(MemoryAdapter):
         expanded = list(candidates)
         seen = {c["anchor"] for c in candidates}
         for anchor, row in by_anchor.items():
-            if anchor in seen:
+            if anchor in seen or anchor in fresh:
                 continue
             row_keys = {k.lower() for k in (row.get("keywords") or [])}
             if not row_keys:
@@ -478,8 +508,14 @@ class BrambleAdapter(MemoryAdapter):
         """Ask the LLM which retrieved memories the request actually covers.
 
         Falls back to the lexical-overlap heuristic (all matching candidates)
-        when the LLM is unavailable.
+        when the LLM is unavailable. Fresh writes (relearning values, F6
+        replacements observed in the last few minutes) are never removable —
+        that is the RLA guard.
         """
+        if not candidates:
+            return []
+        fresh = self._fresh_anchors()
+        candidates = [c for c in candidates if c["anchor"] not in fresh] or []
         if not candidates:
             return []
         listing = "\n".join(f"{i}. {c['summary'][:110]}" for i, c in enumerate(candidates))
