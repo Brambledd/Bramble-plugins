@@ -432,6 +432,16 @@ export class EvidenceStore {
     return true;
   }
 
+  /**
+   * Hard-remove one document from the derived index: the evidence row (FTS
+   * triggers mirror the delete) plus its vector row. Cue-ledger entries for
+   * the anchor survive — they hold anchor + revision only, never content.
+   */
+  removeByAnchor(anchor) {
+    this.db.prepare('DELETE FROM evidence_docs WHERE anchor = ?').run(anchor);
+    this.db.prepare('DELETE FROM evidence_vectors WHERE anchor = ?').run(anchor);
+  }
+
   stats() {
     const byKind = this.db
       .prepare('SELECT kind, COUNT(*) AS n FROM evidence_docs GROUP BY kind ORDER BY n DESC')
