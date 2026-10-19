@@ -35,6 +35,10 @@ function observe({ speaker, text, timestamp, sessionId, turnIndex }) {
   const anchor = `turn-${sessionId}-${String(turnIndex).padStart(4, '0')}`;
   const clean = String(text ?? '').trim();
   if (clean.length === 0) return { ok: true, anchor, skipped: true };
+  // Date tokens go into keywords (retrievable, deterministic filtering) but
+  // NOT into summaries: timestamp text floods the trigram/vector lanes and
+  // drowns the content signal (lesson from the F4 trace).
+  const stamp = String(timestamp ?? '').trim();
   const item = {
     anchor,
     kind: 'note',
@@ -42,10 +46,12 @@ function observe({ speaker, text, timestamp, sessionId, turnIndex }) {
     authority: 'standard',
     title: clean.length > 120 ? `${clean.slice(0, 117)}…` : clean,
     summary: clean,
-    keywords: clean.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1).slice(0, 24),
+    keywords: [
+      ...clean.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1).slice(0, 20),
+      ...(stamp ? [stamp.slice(0, 10), stamp.slice(0, 7)] : []), // full date + YYYY-MM
+    ],
     sourcePath: null,
-    revision: computeRevision(clean), // in-memory turns have no files; the
-    // content hash still gives vectors a stable revision to key on
+    revision: computeRevision(clean),
     supersededBy: null,
   };
   store.upsert(item);
@@ -98,6 +104,32 @@ function handle(req) {
         limit: Math.min(20, Math.max(1, req.limit ?? 5)),
       });
       return { ok: true, events: found };
+    }
+    case 'put': {
+      // Direct evidence write for consolidated inferences (adapter-driven).
+      const clean = String(req.text ?? '').trim();
+      if (clean.length === 0) return { ok: true, skipped: true };
+      const anchor = String(req.anchor ?? `infer-${Date.now()}`);
+      store.upsert({
+        anchor,
+        kind: 'inference',
+        status: 'active',
+        authority: 'standard',
+        title: clean.length > 120 ? `${clean.slice(0, 117)}…` : clean,
+        summary: clean,
+        keywords: Array.isArray(req.keywords) ? req.keywords : [],
+        sourcePath: null,
+        revision: computeRevision(clean),
+        supersededBy: null,
+      });
+      void store.embedBackfill({ batchSize: 8 }).catch(() => {});
+      return { ok: true, anchor };
+    }
+    case 'list': {
+      const rows = store.db
+        .prepare('SELECT anchor, kind, title, summary, keywords FROM evidence_docs ORDER BY anchor')
+        .all();
+      return { ok: true, items: rows.map((r) => ({ ...r, keywords: r.keywords ? r.keywords.split(',') : [] })) };
     }
     case 'stats':
       return { ok: true, evidence: store.stats(), events: events.stats() };

@@ -10,11 +10,11 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(r"E:\ClowderAI\bemula-benchmark\.env", override=True)
 
-from bemula.llm import BaseLLM  # noqa: E402
+from bemula.llm import get_llm  # noqa: E402
 from bemula.schemas import DialogueInstance  # noqa: E402
 from bramble_adapter import FORGET_INTENT_RE  # noqa: E402
 
-llm = BaseLLM()
+llm = get_llm()  # real OpenAI-backed client (BaseLLM is abstract)
 
 import bramble_adapter as ba  # noqa: E402
 
