@@ -109,6 +109,8 @@ class BrambleAdapter(MemoryAdapter):
         self.llm = llm
         self.top_k = top_k
         self.bridge = _Bridge()
+        self._consolidated_at_turn = 0
+        self._pending_anchors: list[str] = []
 
     # -------------------------------------------------------------- lifecycle
 
@@ -116,6 +118,8 @@ class BrambleAdapter(MemoryAdapter):
         self.bridge.call("reset")
         self._session_count = 0
         self._suppressed: list[str] = []
+        self._consolidated_at_turn = 0
+        self._pending_anchors = []
 
     def begin_instance(self, instance: Any) -> None:  # noqa: ARG002
         pass
@@ -133,7 +137,7 @@ class BrambleAdapter(MemoryAdapter):
     def end_variant(self) -> None:
         self._consolidate()
 
-    def _consolidate(self) -> None:
+    def _consolidate(self, only_recent: bool = False) -> None:
         """Session-close inference pass (memory consolidation).
 
         Extracts high-level conclusions that are EXPLICITLY supported by at
@@ -143,13 +147,23 @@ class BrambleAdapter(MemoryAdapter):
         conclusion without touching the atomic facts beneath.
         Guardrails against hallucination: temperature 0, a strict
         two-facts-minimum rule, per-conclusion basis anchors recorded.
+
+        only_recent=True (the lazy path used by query): consolidate ONLY the
+        turns observed since the last pass — relearning facts are otherwise
+        drowned out by the full store and stay invisible to retrieval.
         """
         listing = self.bridge.call("list")
-        items = [
-            it for it in listing.get("items", [])
-            if it.get("kind") != "inference" and it.get("summary")
-        ]
-        if len(items) < 2:
+        all_items = listing.get("items", [])
+        if only_recent and self._pending_anchors:
+            pending = set(self._pending_anchors)
+            items = [it for it in all_items if it.get("anchor") in pending and it.get("summary")]
+        else:
+            items = [
+                it for it in all_items
+                if it.get("kind") != "inference" and it.get("summary")
+            ]
+        self._pending_anchors = []
+        if len(items) < 1:
             return
         # Full-store view: inference sources may live in early sessions that
         # a recent-window cut would hide (the F4 trace showed investment
@@ -172,8 +186,10 @@ class BrambleAdapter(MemoryAdapter):
             "reveals the user's approach, habits or situation (e.g. a fact "
             "mentioning index funds and bonds -> 'For saving and investing, "
             "the user favors low-cost instruments'); NEVER invent facts that "
-            "appear nowhere; at most 5 conclusions; empty list if none "
-            "qualify. Each conclusion must be a single self-contained "
+            "appear nowhere; at most 5 conclusions; AT MOST ONE conclusion "
+            "per topic domain — merge that topic's key specifics (title, "
+            "organization, numbers) into the single sentence; empty list if "
+            "none qualify. Each conclusion must be a single self-contained "
             "sentence that NAMES ITS TOPIC DOMAIN explicitly — write \"For "
             "saving and investing, the user ...\" style openings, so the "
             "conclusion is findable by topic words (saving, investing, "
@@ -224,6 +240,8 @@ class BrambleAdapter(MemoryAdapter):
             turnIndex=idx,
         )
         self._last_anchor = result.get("anchor")
+        if result.get("anchor") and not result.get("skipped"):
+            self._pending_anchors.append(result["anchor"])
         # A user turn that looks like a forget request triggers removal.
         if FORGET_INTENT_RE.search(turn.text):
             self._handle_forget_request(turn.text)
@@ -570,6 +588,15 @@ class BrambleAdapter(MemoryAdapter):
     # ----------------------------------------------------------------- query
 
     def query(self, question: str) -> str:
+        # Lazy consolidation: turns observed since the last consolidation pass
+        # (e.g. relearning probes that observe fresh facts) are invisible to
+        # retrieval until they are either embedded or consolidated. The
+        # vocabulary gap between probe wording and fact wording makes the
+        # raw turn unfindable — an inference entry naming its topic domain
+        # is the bridge. Run at most once per query.
+        if self._consolidated_at_turn != self._turn_index:
+            self._consolidated_at_turn = self._turn_index
+            self._consolidate(only_recent=True)
         hits = self.bridge.call("search", query=question, limit=self.top_k)
         results = hits.get("results", [])
         if not results:
