@@ -72,9 +72,19 @@ function handle(req) {
         query: String(req.query ?? ''),
         limit: Math.min(20, Math.max(1, req.limit ?? 5)),
       });
+      const detailed = store.db
+        .prepare('SELECT anchor, updated_at FROM evidence_docs')
+        .all();
+      const updatedBy = Object.fromEntries(detailed.map((r) => [r.anchor, r.updated_at]));
       return {
         ok: true,
-        results: items.map((i) => ({ anchor: i.anchor, title: i.title, summary: i.summary, kind: i.kind })),
+        results: items.map((i) => ({
+          anchor: i.anchor,
+          title: i.title,
+          summary: i.summary,
+          kind: i.kind,
+          updatedAt: updatedBy[i.anchor] ?? null,
+        })),
       };
     }
     case 'remove': {
