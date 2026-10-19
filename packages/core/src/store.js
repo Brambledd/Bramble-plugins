@@ -296,7 +296,7 @@ export class EvidenceStore {
       .prepare(
         `SELECT d.anchor, d.source_hash FROM evidence_docs d
          LEFT JOIN evidence_vectors v ON v.anchor = d.anchor AND v.revision = d.source_hash AND v.model = ?
-         WHERE v.anchor IS NULL`,
+         WHERE v.anchor IS NULL AND d.source_hash IS NOT NULL`,
       )
       .all(this.embedding.model)
       .slice(0, batchSize);
@@ -430,6 +430,16 @@ export class EvidenceStore {
     this.db.exec('DELETE FROM evidence_docs;');
     this.db.exec('DELETE FROM evidence_vectors;');
     return true;
+  }
+
+  /**
+   * Hard-remove one document from the derived index: the evidence row (FTS
+   * triggers mirror the delete) plus its vector row. Cue-ledger entries for
+   * the anchor survive — they hold anchor + revision only, never content.
+   */
+  removeByAnchor(anchor) {
+    this.db.prepare('DELETE FROM evidence_docs WHERE anchor = ?').run(anchor);
+    this.db.prepare('DELETE FROM evidence_vectors WHERE anchor = ?').run(anchor);
   }
 
   stats() {

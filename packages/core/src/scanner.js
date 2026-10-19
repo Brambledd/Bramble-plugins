@@ -97,7 +97,33 @@ export async function indexRoot(store, rootDir, { kindHint = null } = {}) {
     else unchanged += 1;
     anchors.push(anchor);
   }
-  return { scanned, updated, unchanged, anchors };
+  const removed = removeOrphans(store, absRoot, new Set(anchors));
+  return { scanned, updated, unchanged, removed, anchors };
+}
+
+/**
+ * Delete happens by removing the source file — the scanner must then drop
+ * the orphaned index rows, or deleted memories keep leaking titles and
+ * summaries through memory_search. Only rows whose source_path lives under
+ * THIS root are eligible (other roots and anchor-less rows are untouched).
+ * Cue-ledger rows survive: they record behavior (anchor + revision), never
+ * content.
+ * @returns {string[]} removed anchors
+ */
+function removeOrphans(store, absRoot, seenAnchors) {
+  const prefix = `${absRoot.replace(/\\/g, '/')}/`;
+  const rows = store.db
+    .prepare('SELECT anchor, source_path FROM evidence_docs WHERE source_path IS NOT NULL')
+    .all();
+  const removed = [];
+  for (const row of rows) {
+    const sourcePath = String(row.source_path).replace(/\\/g, '/');
+    if (!sourcePath.startsWith(prefix)) continue;
+    if (seenAnchors.has(row.anchor)) continue;
+    store.removeByAnchor(row.anchor);
+    removed.push(row.anchor);
+  }
+  return removed;
 }
 
 /**

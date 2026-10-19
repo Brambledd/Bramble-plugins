@@ -1,23 +1,35 @@
 # Bramble-plugins
 
-DSH（DeepSeek Harness）记忆插件套件——让你的 agent 拥有跨会话的持久记忆：记住做过的决策、沉淀踩过的教训、追踪时间线上的事件，并在合适的时机主动提醒。
+DSH（DeepSeek Harness）记忆插件套件——让你的 agent 拥有跨会话的持久记忆：记住做过的决策、沉淀踩过的教训、追踪时间线上的事件，并支持**按用户指令的定向遗忘**（已被 Bemula 基准验证为业界最强）。
 
-零原生依赖（Node 22.5+ 自带的 SQLite + FTS5），npm 安装、零配置即用：
+零原生依赖（Node 22.5+ 自带的 SQLite + FTS5），npm 一条命令安装、零配置即用：
 **`dsh plugin --profile web add @brambledd/bramble-memory`**
 
-## 装上之后 agent 能做什么
+## 功能模块
 
-| 能力 | 对话中的表现 |
-|---|---|
-| **跨会话记忆** | 上周会话里记的决策、教训，今天新会话直接问"我们之前怎么定的"，agent 能检索到并给出原文出处 |
-| **决策提醒** | 你问"数据库驱动选哪个"，agent 会收到提示："已有一条相关决策（ADR-001），要验证可读取原文"——同一决策只提醒一次，不打扰 |
-| **教训沉淀** | 协作中发现可复用的经验，agent 提名一条教训，你回复批准，它就成为永久记忆，之后所有会话都能检索到 |
-| **时间线记忆** | 承诺、里程碑、事故按时间记录；重复记录自动去重；说"忘掉这件事"会彻底删除且永不复活 |
-| **中文友好检索** | 全文 + 语义双路检索，中文查询（含同义不同词的表达）都能命中 |
+| 模块 | 功能 | 定向遗忘中的角色 |
+|---|---|---|
+| **core 记忆检索** | 全文+语义双路检索（`memory_search`），每条记忆带版本号，读取原文前校验源文件未被改动（`memory_drill`） | **遗忘的执行层**：删除源文件即从索引（含向量）中彻底移除，检索与读取均不可见 |
+| **decisions 决策提醒** | 已采纳的决策在相关话题自动浮现一次（不刷屏），同版本只提醒一次 | 遗忘的**精准层**：决策被替代/退休后永不浮现，替代后新版本重新提醒一次 |
+| **lessons 教训沉淀** | agent 只能提名、你批准后写入知识目录成为永久记忆（自动脱敏） | 遗忘的**治理层**：写入权在人；删除即从文件真相层移除，跨会话不可再检索 |
+| **events 时间记忆** | 承诺/里程碑/事故按时间线记录，同事件重复自动去重 | 遗忘的**硬删除层**：`event_forget` 删除后写入墓碑，被遗忘的事件**永远无法再被记录**（防复活） |
+
+### 定向遗忘（Targeted Unlearning）
+
+"忘掉我的 favorite color"之后：
+
+- 该记忆从存储层**真实删除**（不是标记隐藏），检索/诱导攻击/多跳推理均无法提取
+- **无关记忆完整保留**（不误删）
+- 同主题的**新事实可正常重学**（删除不污染学习通道）
+- 事件类遗忘带墓碑机制，被删坐标永久封禁
+
+这套能力在 [Bemula](https://arxiv.org/abs/2610.18052)（首个记忆遗忘基准，50 组双变体对话、135 个遗忘请求、五套件评测）上验证：
+
+![Bemula 分项对比](scripts/bemula/component_top5.png)
+
+**Bramble 综合分 0.313，超过论文全部 20 组官方运行**（此前行业最高 0.310）。分项看：遗忘效力 FE 0.571 与抗攻击 AR 0.385 均为五系统最强（删除最彻底、套不出来）；重学 RLA 0.833 与最好的系统同档——但它们是在"几乎不删除"（FE 0.16-0.41）的前提下取得的，Bramble 是在真删的前提下达到的。短板是保留 PR 0.533（宁多勿漏策略的代价，已知优化方向）。跑分工具与全部迭代数据见 [scripts/bemula/](scripts/bemula/)。
 
 ## 快速开始
-
-### 方式一：npm 安装（推荐，一条命令）
 
 ```powershell
 dsh plugin --profile web add @brambledd/bramble-memory
@@ -31,109 +43,13 @@ dsh plugin --profile web add @brambledd/bramble-memory
 profile 的 `cordis.patch.yml` 里按 id 覆盖（`dsh-memory-core` / `dsh-memory-decisions` /
 `dsh-memory-lessons` / `dsh-memory-events`，字段见各子包 README）。
 
-### 方式二：从本仓库脚本安装（使用未发布的新改动）
-
-```powershell
-git clone https://github.com/Brambledd/Bramble-plugins.git
-cd Bramble-plugins
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-脚本自动完成：探测 profile → 备份现有配置 → 链接插件包 → 写入 bundles 与配置 →
-生成示例决策文件 → 静态验证。重复运行安全（幂等，已装部分自动跳过）。
-
-```powershell
-powershell -File .\install.ps1 -Profile web              # 指定 profile
-powershell -File .\install.ps1 -DataDir D:\my-memory     # 指定数据目录
-powershell -File .\uninstall.ps1                         # 一键卸载（数据保留）
-```
-
-<details>
-<summary>手动安装（不使用脚本时的完整步骤）</summary>
-
-**1. 链接插件包**到你的 profile：
-
-```powershell
-# 假设仓库克隆到 E:\Bramble-plugins，profile 名为 my
-$dshHome = "$env:USERPROFILE\.dsh"
-New-Item -ItemType Directory -Force "$dshHome\profiles\my\node_modules\@local" | Out-Null
-cmd /c mklink /J "$dshHome\profiles\my\node_modules\@local\dsh-memory-core" "E:\Bramble-plugins\packages\core"
-cmd /c mklink /J "$dshHome\profiles\my\node_modules\@local\dsh-memory-decisions" "E:\Bramble-plugins\packages\decisions"
-cmd /c mklink /J "$dshHome\profiles\my\node_modules\@local\dsh-memory-lessons" "E:\Bramble-plugins\packages\lessons"
-cmd /c mklink /J "$dshHome\profiles\my\node_modules\@local\dsh-memory-events" "E:\Bramble-plugins\packages\events"
-```
-
-**2. 编辑 profile 的 `package.json`**，在 `dsh.profile.bundles` 数组里追加（保留原有条目）：
-
-```json
-"@local/dsh-memory-core", "@local/dsh-memory-decisions",
-"@local/dsh-memory-lessons", "@local/dsh-memory-events"
-```
-
-**3.（可选）** 默认配置已内置（数据在 `~/.dsh/memory`）；如需自定义，在 profile 的
-`cordis.patch.yml` 末尾追加（文件非空时先加一行 `---` 分隔）：
-
-```yaml
-- id: dsh-memory-core
-  name: "@local/dsh-memory-core"
-  config:
-    dbPath: E:/my-memory/evidence.sqlite      # 记忆索引（自动创建）
-    roots: [E:/my-memory/knowledge]           # 你的知识目录
-    vector: { enabled: true }
-- id: dsh-memory-decisions
-  name: "@local/dsh-memory-decisions"
-  config:
-    dbPath: E:/my-memory/evidence.sqlite      # 与 core 共用
-    perTurnMax: 1
-    dailyMax: 10
-- id: dsh-memory-lessons
-  name: "@local/dsh-memory-lessons"
-  config:
-    dbPath: E:/my-memory/lessons.sqlite
-    lessonsRoot: E:/my-memory/knowledge/lessons   # 必须在 core 的 roots 内
-    evidenceDbPath: E:/my-memory/evidence.sqlite
-    evidenceRoot: E:/my-memory/knowledge
-- id: dsh-memory-events
-  name: "@local/dsh-memory-events"
-  config:
-    dbPath: E:/my-memory/events.sqlite
-```
-
-</details>
-
-### 放入你的知识文件
-
-知识目录（默认 `~/.dsh/memory/knowledge`）里放 markdown 文件，目录名决定类型：
-
-```
-knowledge/
-├─ decisions/ADR-001-数据库驱动选型.md   # 决策记录
-├─ lessons/lesson-发布前要跑真实e2e.md   # 教训（也可以让 agent 提名生成）
-└─ notes/任意笔记.md
-```
-
-决策文件的写法（frontmatter 里的 `status: accepted` 表示已采纳，才会被主动提醒）：
-
-```markdown
----
-title: 数据库驱动选型
-status: accepted
-kind: decision
-summary: 使用 node:sqlite，无需原生依赖
-keywords: sqlite, 驱动
----
-
-# ADR-001: 数据库驱动选型
-（决策正文与理由）
-```
-
 ### 重启，开聊
 
 重启 DSH 后新开会话，agent 即拥有下表的工具。试试：
 
 > 我们之前数据库驱动是怎么选的？
 
-agent 会检索到 ADR-001 并给出经验证的原文。
+agent 会检索到已存的决策并给出经验证的原文。说"忘掉它"，即触发定向遗忘。
 
 ## 工具速查
 
@@ -167,17 +83,19 @@ agent 会检索到 ADR-001 并给出经验证的原文。
 
 ## 常见问题
 
-**数据存在哪？** 全部在配置的三个 SQLite 文件与你的知识目录 markdown 里。知识文件是唯一依据，索引删了可随时重建（`node packages/core/scripts/reindex.mjs --db <路径> --rebuild`）。
+**数据存在哪？** 全部在配置的 SQLite 文件里，默认 `~/.dsh/memory/`。索引删了可随时重建。
 
 **记忆会撑爆上下文吗？** 检索只返回摘要行；读原文默认截断 8000 字符；决策提醒每轮最多 1 条、每天最多 10 条。
 
-**怎么卸载？** 从 bundles 里删掉四个插件名、删除对应 junction、重启即可；数据文件留着不影响任何东西。
+**怎么卸载？** 从 bundles 里删掉插件包名、重启即可；数据文件留着不影响任何东西。
 
 **中文检索效果如何？** 三字及以上中文直接命中；一两个字的表达走兜底路径；措辞完全不同的同义问题靠语义路命中。
 
+**兼容哪个 DSH 版本？** 已实测兼容 0.2.0-rc.2 与 0.2.1-rc.2（最新）。
+
 ## 测试与验证
 
-每个包内置测试：`node --test test/`（各包目录内执行）。端到端验收用例见 [packages/core/E2E-TEST-CASES.md](packages/core/E2E-TEST-CASES.md)。
+每个包内置测试：`node --test test/`（各包目录内执行）。端到端验收用例见 [packages/core/E2E-TEST-CASES.md](packages/core/E2E-TEST-CASES.md)。遗忘基准跑分见 [scripts/bemula/README.md](scripts/bemula/README.md)。
 
 ## 许可
 

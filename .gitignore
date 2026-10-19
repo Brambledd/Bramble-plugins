@@ -10,3 +10,5 @@ packages/bramble-memory/plugins/
 packages/bramble-memory/node_modules/
 packages/*/node_modules/
 
+scripts/bemula/__pycache__/
+

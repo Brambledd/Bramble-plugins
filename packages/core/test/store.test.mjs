@@ -333,6 +333,32 @@ test('recency decay ranks fresh evidence above stale on equal lexical match', as
   }
 });
 
+test('deleting a source file removes its index rows on rescan (no orphan leakage)', async () => {
+  const ws = await tempWorkspace();
+  try {
+    await indexRoot(ws.store, ws.fixtures);
+    assert.ok(ws.store.getByAnchor('ADR-002'));
+    // delete the source file and rescan the same root
+    await rm(join(ws.fixtures, 'decisions', 'ADR-002-fail-closed-drill.md'));
+    const second = await indexRoot(ws.store, ws.fixtures);
+    assert.ok(second.removed.includes('ADR-002'), 'orphan row must be dropped');
+    assert.equal(ws.store.getByAnchor('ADR-002'), null);
+    // search no longer surfaces its title or summary
+    const hits = ws.store.search({ query: 'fail closed revision mismatch', limit: 20 });
+    assert.ok(hits.items.every((i) => i.anchor !== 'ADR-002'), 'deleted memory must not appear in search');
+    // drill fails closed with not_found
+    const drill = await ws.store.drill({ anchor: 'ADR-002' });
+    assert.equal(drill.status, 'not_available');
+    assert.equal(drill.invalidationReason, 'not_found');
+    // other roots' rows are untouched (ADR-001 from the same root stays)
+    assert.ok(ws.store.getByAnchor('ADR-001'));
+    assert.equal(second.scanned, 4);
+  } finally {
+    ws.store.close();
+    await rm(ws.dir, { recursive: true, force: true });
+  }
+});
+
 test('empty knowledge root is handled without error', async () => {
   const ws = await tempWorkspace();
   try {
