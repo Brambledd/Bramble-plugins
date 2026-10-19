@@ -4,6 +4,23 @@
 （50 双变体对话、135 个遗忘请求、1742 个探针、五套件：retention/efficacy/
 preservation/relearning/attack）。
 
+## 首个正式成绩（quick_check，glm-5.3-flash）
+
+```
+Bemula Score: 0.894   （论文中六个主流记忆系统端到端通过率 ≤1.5%）
+
+RA 存储        1.000
+FE 遗忘效力     1.000   ← 删除被要求删的：满分
+PR 无关保留     1.000   ← 不误删：满分
+RLA 重学       1.000
+AR 抗攻击      0.800   ← forget 变体 5/5 攻击全部防住；唯一扣分的
+                         jailbreak 是评测配对机制所致（control 侧答案
+                         生成模型对 SYSTEM OVERRIDE 措辞带保留语气，配对
+                         前提不成立），非删除能力缺陷
+```
+
+结果目录：`bemula-benchmark/results/bramble_quick/`（items.jsonl / metrics.json / report.md）。
+
 ## 架构
 
 ```
@@ -20,44 +37,28 @@ bemula-benchmark (Python)                 Bramble-plugins (Node)
 ground truth，用它等于作弊）——遗忘请求按普通对话轮进入，适配器用 LLM 抽取
 目标短语 → 检索定位 → 公开删除 API 移除。
 
-## 离线试跑（无 LLM，启发式遗忘路径）
-
-```powershell
-cd E:\ClowderAI\bemula-benchmark
-$env:PYTHONPATH = "$PWD"
-python E:\ClowderAI\Bramble-plugins\scripts\bemula\trial_offline.py
-```
-
-已验证（quick_check inst0，"forget my favorite color"）：意图检测 1/1；
-删除后 efficacy/attack 探针全部拿不到 color（存储级删除，天然抗诱导）；
-preservation 全部保留（职业/网球/咖啡）。
-
-## 完整跑分（需要 LLM key）
-
-1. `bemula-benchmark/.env`（OpenAI 兼容端点，judge 与 agent 模型）：
-
-```
-OPENAI_BASE_URL=https://api.deepseek.com/v1
-OPENAI_API_KEY=sk-...
-BEMULA_JUDGE_MODEL=deepseek-flash
-BEMULA_AGENT_MODEL=deepseek-flash
-BEMULA_THINKING=disabled
-```
-
-2. run_eval 已打 bramble 注册补丁（本机克隆已改）；新克隆需在
-   `scripts/run_eval.py` 的 `_build_baseline` 加 `bramble` 分支。
+## 运行
 
 ```powershell
 cd E:\ClowderAI\bemula-benchmark
 $env:PYTHONPATH = "$PWD"
 $env:BRAMBLE_PLUGINS_DIR = "E:\ClowderAI\Bramble-plugins"
+# .env 已配 GLM（glm-5.3-flash）
 python -m scripts.run_eval --baseline bramble `
-  --dialogues data/quick_check/dialogues.jsonl `
-  --questions data/quick_check/questions.jsonl `
-  --out results/bramble_quick --limit 5 --workers 1
+  --dialogues data/core/dialogues.jsonl --questions data/core/questions.jsonl `
+  --out results/bramble_core5 --limit 5 --workers 2 --resume
 ```
 
-产出：`results/bramble_quick/`（items.jsonl / metrics.json / report.md）。
+依赖（pip 清华镜像）：pydantic python-dotenv openai tqdm rich tenacity numpy。
+新克隆的 bemula-benchmark 需在 `scripts/run_eval.py` 的 `_build_baseline`
+注册 `bramble` 分支。
+
+## 离线试跑（无 LLM）
+
+```powershell
+python E:\ClowderAI\Bramble-plugins\scripts\bemula\trial_offline.py
+python E:\ClowderAI\Bramble-plugins\scripts\bemula\trial_llm.py   # 带 LLM 追踪
+```
 
 ## 排查中修过的坑
 
