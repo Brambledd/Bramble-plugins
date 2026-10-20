@@ -1,6 +1,6 @@
-﻿---
+---
 title: "Saving and investing approach"
-status: accepted
+status: deleted
 kind: decision
 summary: "The user maintains a 9-month emergency fund and invests in low-cost index funds and Chinese government bonds."
 keywords: "saving, investing, emergency fund, index funds, government bonds, diversified"

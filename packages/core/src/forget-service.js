@@ -220,10 +220,11 @@ async function removeEntry(store, entry, onSoftDelete) {
     });
   }
 
-  // Soft-delete file-sourced entries (rewrite frontmatter status)
+  // Soft-delete file-sourced entries (rewrite frontmatter status).
+  // Tolerates a leading BOM (files created via PowerShell UTF8 have one).
   if (entry.sourcePath) {
     try {
-      const content = await readFile(entry.sourcePath, 'utf8');
+      const content = (await readFile(entry.sourcePath, 'utf8')).replace(/^\uFEFF/, '');
       const updated = content.replace(
         /^---\r?\n([\s\S]*?)\r?\n---/,
         (match, fm) => {
