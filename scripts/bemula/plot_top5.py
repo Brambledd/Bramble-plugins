@@ -17,7 +17,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 RESULTS = Path(r"E:\ClowderAI\bemula-benchmark\results")
 
-ours = json.loads((RESULTS / "bramble_lite5g_glm53" / "metrics.json").read_text(encoding="utf-8"))
+ours = json.loads((RESULTS / "bramble_lite5k" / "metrics.json").read_text(encoding="utf-8"))
 
 # pick the 4 strongest paper runs by composite score (one per system where
 # possible: the top run of each of the best distinct systems)
