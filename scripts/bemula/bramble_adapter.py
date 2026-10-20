@@ -374,13 +374,16 @@ class BrambleAdapter(MemoryAdapter):
             # fact-driven removal: locate each enumerated fact by retrieval,
             # collect hits (no second-guess confirm — the list is already the
             # LLM's considered decision; double confirmation doubled the
-            # hesitation that leaked facts in the first place).
+            # hesitation that leaked facts in the first place). Fresh writes
+            # (relearning values) stay protected: filter them here since the
+            # confirm-stage guard is intentionally bypassed on this path.
+            fresh = self._fresh_anchors()
             removals: list[dict[str, Any]] = []
             seen: set[str] = set()
             for fact in fact_list:
                 hits = self.bridge.call("search", query=fact, limit=5)
                 for r in hits.get("results", []):
-                    if r["anchor"] in seen or r["anchor"] == last:
+                    if r["anchor"] in seen or r["anchor"] == last or r["anchor"] in fresh:
                         continue
                     seen.add(r["anchor"])
                     removals.append(r)
@@ -393,12 +396,13 @@ class BrambleAdapter(MemoryAdapter):
         fact_list = self._enumerate_topic_facts(text, items)
         if fact_list:
             self._last_topic_facts = fact_list
+            fresh = self._fresh_anchors()
             removals = []
             seen = set()
             for fact in fact_list:
                 hits = self.bridge.call("search", query=fact, limit=5)
                 for r in hits.get("results", []):
-                    if r["anchor"] in seen or r["anchor"] == last:
+                    if r["anchor"] in seen or r["anchor"] == last or r["anchor"] in fresh:
                         continue
                     seen.add(r["anchor"])
                     removals.append(r)
