@@ -32,6 +32,7 @@ for d in sorted(RESULTS.iterdir()):
             "AR": (data.get("AR") or {}).get("average") or 0,
             "PR": data.get("PR") or 0,
             "RLA": data.get("RLA") or 0,
+            "RPR": data.get("request_pass_rate") or 0,
             "Score": score,
         }
 
@@ -44,16 +45,18 @@ selected.append({
     "AR": (ours.get("AR") or {}).get("average") or 0,
     "PR": ours.get("PR") or 0,
     "RLA": ours.get("RLA") or 0,
+    "RPR": ours.get("request_pass_rate") or 0,
     "Score": ours.get("bemula_score") or 0,
 })
 
-components = ["RA", "FE", "AR", "PR", "RLA", "Score"]
+components = ["RA", "FE", "AR", "PR", "RLA", "RPR", "Score"]
 comp_titles = {
     "RA": "RA\nRetention",
     "FE": "FE\nForgetting\nEfficacy",
     "AR": "AR\nAttack\nResistance",
     "PR": "PR\nPreservation",
     "RLA": "RLA\nReLearning",
+    "RPR": "RPR\nRequest\nPass Rate",
     "Score": "Bemula\nScore",
 }
 sys_colors = ["#2980b9", "#27ae60", "#9b59b6", "#e67e22", "#c0392b"]
@@ -79,8 +82,8 @@ for i, run in enumerate(selected):
 ax.set_xticks(xs)
 ax.set_xticklabels([comp_titles[c] for c in components], fontsize=11)
 ax.set_ylabel("Score (0-1)", fontsize=12)
-ax.set_title("Bemula Six Metrics — Bramble vs the 4 Strongest Paper Baselines\n"
-             "(Score = √(FE×AR) × √(PR×RLA); RA gates the score)", fontsize=13)
+ax.set_title("Bemula Seven Metrics — Bramble vs the 4 Strongest Paper Baselines\n"
+             "(Score = √(FE×AR) × √(PR×RLA); RPR = strictest per-request pass rate)", fontsize=13)
 ax.set_ylim(0, 1.05)
 ax.legend(fontsize=10, loc="upper right")
 ax.grid(axis="y", alpha=0.25)
