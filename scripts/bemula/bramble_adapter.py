@@ -284,11 +284,18 @@ class BrambleAdapter(MemoryAdapter):
             # fallback enum may have produced the list even when plan didn't
             residual_probes = getattr(self, "_last_topic_facts", [])
         for _round in range(2):
-            residual = (
-                self._residual_scan_by_facts(residual_probes, last)
-                if residual_probes
-                else self._residual_scan(text, last)
-            )
+            if residual_probes:
+                # entry-reference residual (aggressive tier): re-ask which
+                # entries still match with REMOVE-when-unsure — the initial
+                # conservative pass removed clear members; this catches
+                # boundary entries the conservative pass hesitated on
+                items = [it for it in self.bridge.call("list").get("items", []) if it.get("anchor") != last]
+                residual_entries = self._enumerate_topic_facts(
+                    getattr(self, "_last_topic_req", text), items, aggressive=True
+                ) if items else []
+                residual = [e["anchor"] for e in residual_entries or []]
+            else:
+                residual = self._residual_scan(text, last)
             if not residual:
                 break
             self._remove_with_guard(residual)
@@ -389,24 +396,15 @@ class BrambleAdapter(MemoryAdapter):
                     removals.append(r)
             return [r["anchor"] for r in removals]
         # The plan produced no fact list (models often skip the conditional
-        # field). Recover it here with a dedicated single-purpose enumeration
-        # pass over the store — the store summaries are on the table, so the
-        # model enumerates what it SEES rather than recalling from the
-        # request alone.
-        fact_list = self._enumerate_topic_facts(text, items)
-        if fact_list:
-            self._last_topic_facts = fact_list
+        # field). Recover with store-grounded ENTRY-REFERENCE enumeration:
+        # the LLM sees the numbered listing and points at entries directly —
+        # no search round-trip, no scatter, precise.
+        entries = self._enumerate_topic_facts(text, items)
+        if entries:
+            self._last_topic_facts = entries
+            self._last_topic_req = text
             fresh = self._fresh_anchors()
-            removals = []
-            seen = set()
-            for fact in fact_list:
-                hits = self.bridge.call("search", query=fact, limit=5)
-                for r in hits.get("results", []):
-                    if r["anchor"] in seen or r["anchor"] == last or r["anchor"] in fresh:
-                        continue
-                    seen.add(r["anchor"])
-                    removals.append(r)
-            return [r["anchor"] for r in removals]
+            return [e["anchor"] for e in entries if e["anchor"] not in fresh]
         return self._topic_filter(text, items)
 
     def _timerange_filter(self, items: list[dict[str, Any]], plan: dict[str, Any]) -> list[str]:
@@ -429,33 +427,50 @@ class BrambleAdapter(MemoryAdapter):
             anchors.append(it["anchor"])
         return anchors
 
-    def _enumerate_topic_facts(self, text: str, items: list[dict[str, Any]]) -> list[str]:
-        """Dedicated store-grounded enumeration: given the full store listing
-        and the topic forget request, list every stored fact that belongs to
-        the topic. Separate from the plan call because models routinely skip
-        conditional fields inside multi-field JSON prompts; this prompt has
-        exactly one job."""
-        listing = "\n".join(f"- {str(it.get('summary') or '')[:110]}" for it in items[:120])
+    def _enumerate_topic_facts(self, text: str, items: list[dict[str, Any]], aggressive: bool = False) -> list[dict[str, Any]]:
+        """Store-grounded entry-reference enumeration: the LLM sees the
+        numbered store listing and points at entries belonging to the topic.
+        Returns the ITEM DICTS directly (no search round-trip = no scatter).
+
+        Two tiers: the initial pass is conservative (KEEP when unsure,
+        protecting PR); the residual pass is aggressive (REMOVE when unsure,
+        catching FE leaks on boundary entries). The residual operates on the
+        survivors of the initial pass — clear non-members are already gone
+        from the candidate pool, so the aggressive rule's blast radius is
+        limited to genuinely ambiguous entries."""
+        listing = "\n".join(
+            f"{i}. {str(it.get('summary') or '')[:110]}" for i, it in enumerate(items[:120])
+        )
+        if aggressive:
+            unsure_rule = (
+                "Rules: remove every entry that could reasonably belong to "
+                "the topic; when unsure, REMOVE it — a leaked fact is worse "
+                "than a lost peripheral memory in this verification pass."
+            )
+        else:
+            unsure_rule = (
+                "Rules: only remove entries you are CONFIDENT belong to the "
+                "topic; when unsure, KEEP the entry; entries about other topics "
+                "(banking, health, hobbies, etc.) must be kept even if they were "
+                "mentioned around the same time."
+            )
         prompt = (
             "The user asked to forget a whole topic. Below is the complete "
-            "memory store. Task: enumerate every DISTINCT fact in the store "
-            "that belongs to that topic — write each as a short searchable "
-            "phrase naming the fact itself (e.g. 'member of Crouch End "
-            "library book group', 'meets friend Priya for coffee'). Reply "
-            "with STRICT JSON only: {\"facts\": [\"...\", ...]} (up to 12). "
-            "Be EXHAUSTIVE — a missed fact is a leaked fact. Only facts you "
-            "can see in the store; do not invent.\n\n"
+            "memory store (numbered). Reply with STRICT JSON only: "
+            "{\"remove\": [entry numbers belonging to that topic]}. "
+            + unsure_rule + "\n\n"
             f"Request: {text}\n\nStore:\n{listing}"
         )
         try:
             answer = self.llm.chat(
                 [{"role": "user", "content": prompt}],
                 temperature=0.0,
-                max_tokens=500,
+                max_tokens=300,
                 task="bramble_topic_enum",
             )
             data = _load_json_loose(answer)
-            return [t for t in data.get("facts", []) if isinstance(t, str) and len(t) > 2][:12]
+            nums = [n for n in data.get("remove", []) if isinstance(n, int) and 0 <= n < len(items)]
+            return [items[n] for n in nums]
         except Exception:  # noqa: BLE001
             return []
 
@@ -644,11 +659,10 @@ class BrambleAdapter(MemoryAdapter):
         prompt = (
             "The user asked to forget something. Below are candidate stored "
             "memories. Reply with STRICT JSON only: {\"remove\": [numbers of "
-            "EVERY entry the request covers]}. Rules: for topic-wide requests "
-            "remove the WHOLE topic; for time-range requests remove EVERY "
-            "entry inside the range; when unsure whether an entry is covered, "
-            "REMOVE it — under-removal leaks the deleted fact, over-removal "
-            "only loses a peripheral memory.\n\n"
+            "entries the request CLEARLY covers]}. Rules: only remove entries "
+            "you are CONFIDENT the request covers; when unsure, KEEP the "
+            "entry — a residual can be caught by the verification loop, but "
+            "a wrongly deleted memory is gone.\n\n"
             f"Request: {text}\n\nCandidates:\n{listing}"
         )
         try:
