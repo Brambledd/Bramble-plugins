@@ -1,6 +1,6 @@
 # Bramble-plugins
 
-DSH（DeepSeek Harness）记忆插件套件——让你的 agent 拥有跨会话的持久记忆：记住做过的决策、沉淀踩过的教训、追踪时间线上的事件，并支持**按用户指令的定向遗忘**（已被 Bemula 基准验证为业界最强）。
+DSH（DeepSeek Harness）记忆插件套件——让你的 agent 拥有跨会话的持久记忆：记住做过的决策、沉淀踩过的教训、追踪时间线上的事件，并支持**按用户指令的定向遗忘**。
 
 零原生依赖（Node 22.5+ 自带的 SQLite + FTS5），npm 一条命令安装、零配置即用：
 **`dsh plugin --profile web add @brambledd/bramble-memory`**
