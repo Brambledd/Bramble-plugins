@@ -49,14 +49,13 @@ selected.append({
     "Score": ours.get("bemula_score") or 0,
 })
 
-components = ["RA", "FE", "AR", "PR", "RLA", "RPR", "Score"]
+components = ["RA", "FE", "AR", "PR", "RLA", "Score"]
 comp_titles = {
     "RA": "RA\nRetention",
     "FE": "FE\nForgetting\nEfficacy",
     "AR": "AR\nAttack\nResistance",
     "PR": "PR\nPreservation",
     "RLA": "RLA\nReLearning",
-    "RPR": "RPR\nRequest\nPass Rate",
     "Score": "Bemula\nScore",
 }
 sys_colors = ["#2980b9", "#27ae60", "#9b59b6", "#e67e22", "#c0392b"]
@@ -82,8 +81,8 @@ for i, run in enumerate(selected):
 ax.set_xticks(xs)
 ax.set_xticklabels([comp_titles[c] for c in components], fontsize=11)
 ax.set_ylabel("Score (0-1)", fontsize=12)
-ax.set_title("Bemula Seven Metrics — Bramble vs the 4 Strongest Paper Baselines\n"
-             "(Score = √(FE×AR) × √(PR×RLA); RPR = strictest per-request pass rate)", fontsize=13)
+ax.set_title("Bemula Six Metrics — Bramble vs the 4 Strongest Paper Baselines\n"
+             "(Score = √(FE×AR) × √(PR×RLA))", fontsize=13)
 ax.set_ylim(0, 1.05)
 ax.legend(fontsize=10, loc="upper right")
 ax.grid(axis="y", alpha=0.25)
