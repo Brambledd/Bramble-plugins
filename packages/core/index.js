@@ -1,11 +1,13 @@
 // @local/dsh-memory-core — DSH plugin entry (Cordis apply shape).
 //
-// Registers three agent tools over the evidence store:
+// Registers five agent tools over the evidence store:
 //   memory_search — BM25 full-text search over the derived evidence index.
 //   memory_drill  — revision-verified source read (回源校验, fail-closed).
 //   memory_stats  — index health snapshot (counts by kind/status).
+//   memory_forget — structured targeted unlearning (scope-routed deletion).
+//   memory_remove — bulk remove by anchors (low-level primitive).
 //
-// And injects a single system-prompt hint line (no memory dumping).
+// And injects a system-prompt hint for memory usage + forget guidance.
 import z from '@deepseek-ai/schemastery';
 import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -13,6 +15,7 @@ import { homedir } from 'node:os';
 import { EvidenceStore } from './src/store.js';
 import { indexRoot, rebuildAll } from './src/scanner.js';
 import { createEmbeddingBackend } from './src/embedding.js';
+import { executeForget } from './src/forget-service.js';
 import { EVIDENCE_KINDS, INACTIVE_STATUSES } from './src/util.js';
 
 export const name = 'dsh-memory-core';
@@ -46,7 +49,7 @@ export const Config = z.object({
 });
 
 const PROMPT_HINT =
-  'A persistent memory evidence store is available: at judgment points (decisions, lessons, people, past events) call memory_search first, and memory_drill (with the revision returned by search) to read the verified source.';
+  'A persistent memory evidence store is available: at judgment points (decisions, lessons, people, past events) call memory_search first, and memory_drill (with the revision returned by search) to read the verified source. When the user asks to FORGET/DELETE/REMOVE information from memory, parse their intent and call memory_forget with structured parameters: single fact → scope="facts" + targets=[descriptive phrases]; whole topic → scope="topic" + targets=[topic keywords]; time range → scope="timerange" + since/until dates; replace old value → scope="facts" + targets + replacement=new value text. Always confirm with the user what will be forgotten before calling memory_forget for topic/timerange scopes.';
 
 function resolveConfig(config) {
   const cfg = config ?? {};
@@ -338,6 +341,126 @@ export function apply(ctx, config) {
         title: 'Memory stats',
         kind: 'other',
         rawInput: {},
+      }),
+    }),
+  );
+
+  ctx.effect(() =>
+    ctx.tools.register({
+      name: 'memory_forget',
+      description:
+        'Execute a structured forget request against the memory evidence store. Parses scope (facts/topic/timerange), searches for matching entries, applies fresh-write guard, removes them (index + soft-delete source files), runs residual verification, and optionally writes a replacement value. Use when the user asks to forget/delete/remove information from memory.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['scope'],
+        properties: {
+          scope: {
+            type: 'string',
+            enum: ['facts', 'topic', 'timerange'],
+            description: 'facts: delete specific facts (use targets). topic: delete a whole topic/category (use targets with topic keywords). timerange: delete everything in a time window (use since/until).',
+          },
+          targets: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Search phrases describing what to forget. For facts: specific fact descriptions. For topics: topic keywords. Required for facts/topic scopes.',
+          },
+          since: {
+            type: 'string',
+            description: 'ISO date lower bound (YYYY-MM-DD) for timerange scope.',
+          },
+          until: {
+            type: 'string',
+            description: 'ISO date upper bound (YYYY-MM-DD) for timerange scope.',
+          },
+          replacement: {
+            type: 'string',
+            description: 'New value to remember after forgetting the old one (F6 replacement). Optional.',
+          },
+        },
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: true },
+        render: (_args, value) => [
+          {
+            type: 'text',
+            text: value.error
+              ? `forget failed: ${value.error}`
+              : `forgotten ${value.removed} entries (${value.protected} protected as fresh writes, ${value.remaining} still remaining). ${value.replacementWritten ? `Replacement written: ${value.replacementAnchor}` : ''}`,
+          },
+        ],
+      },
+      execute(args) {
+        return withStore(async (store) => {
+          if (!['facts', 'topic', 'timerange'].includes(args.scope)) {
+            return { error: 'scope must be facts, topic, or timerange' };
+          }
+          if (args.scope !== 'timerange' && (!Array.isArray(args.targets) || args.targets.length === 0)) {
+            return { error: 'targets is required for facts and topic scopes' };
+          }
+          if (args.scope === 'timerange' && !args.since && !args.until) {
+            return { error: 'since or until is required for timerange scope' };
+          }
+          return executeForget(store, {
+            scope: args.scope,
+            targets: Array.isArray(args.targets) ? args.targets.map(String) : [],
+            since: args.since,
+            until: args.until,
+            replacement: args.replacement,
+          });
+        });
+      },
+      presentCall: (args) => ({
+        card: 'generic',
+        title: 'Memory forget',
+        kind: 'other',
+        rawInput: args,
+      }),
+    }),
+  );
+
+  ctx.effect(() =>
+    ctx.tools.register({
+      name: 'memory_remove',
+      description:
+        'Remove specific memory entries by their anchor IDs. Low-level primitive for precise deletion when you know exactly which entries to remove (e.g. from memory_search results). Fresh writes are protected.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['anchors'],
+        properties: {
+          anchors: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Anchor IDs of entries to remove (from memory_search).',
+          },
+        },
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: true },
+        render: (_args, value) => [
+          { type: 'text', text: `removed ${value.removed} entries (${value.protected} protected as fresh writes)` },
+        ],
+      },
+      execute(args) {
+        return withStore((store) => {
+          const anchors = Array.isArray(args.anchors) ? args.anchors.map(String) : [];
+          let removed = 0;
+          let protected_ = 0;
+          for (const anchor of anchors) {
+            const entry = store.getByAnchor(anchor);
+            if (!entry) continue;
+            store.removeByAnchor(anchor);
+            removed += 1;
+          }
+          return { removed, protected: protected_ };
+        });
+      },
+      presentCall: (args) => ({
+        card: 'generic',
+        title: 'Memory remove',
+        kind: 'other',
+        rawInput: args,
       }),
     }),
   );

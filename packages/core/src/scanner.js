@@ -60,6 +60,13 @@ function inferStatus({ frontmatter, kind }) {
   return 'active';
 }
 
+/** Soft-deleted files (status: deleted) are skipped by the scanner and their
+ *  index rows are removed on rescan — the file is preserved for audit but
+ *  never resurfaces in search or cues. */
+function isSoftDeleted(frontmatter) {
+  return frontmatter.status === 'deleted';
+}
+
 /**
  * Scan one root and upsert every discovered document.
  * @param {import('./store.js').EvidenceStore} store
@@ -71,6 +78,7 @@ export async function indexRoot(store, rootDir, { kindHint = null } = {}) {
   let scanned = 0;
   let updated = 0;
   let unchanged = 0;
+  let softDeleted = 0;
   const anchors = [];
   for await (const filePath of walk(absRoot)) {
     scanned += 1;
@@ -78,6 +86,12 @@ export async function indexRoot(store, rootDir, { kindHint = null } = {}) {
     const revision = computeRevision(content);
     const relativePath = relative(absRoot, filePath);
     const frontmatter = parseFrontmatter(content);
+    // Soft-deleted files are skipped: no index upsert, and their existing
+    // index rows (if any) will be cleaned up by the orphan sweep below.
+    if (isSoftDeleted(frontmatter)) {
+      softDeleted += 1;
+      continue;
+    }
     const kind = inferKind({ relativePath, frontmatter, kindHint });
     const anchor = deriveAnchor({ frontmatter, relativePath, revision });
     const item = {
@@ -98,7 +112,7 @@ export async function indexRoot(store, rootDir, { kindHint = null } = {}) {
     anchors.push(anchor);
   }
   const removed = removeOrphans(store, absRoot, new Set(anchors));
-  return { scanned, updated, unchanged, removed, anchors };
+  return { scanned, updated, unchanged, softDeleted, removed, anchors };
 }
 
 /**
