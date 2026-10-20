@@ -1,9 +1,31 @@
 # Bramble-plugins
 
-DSH（DeepSeek Harness）记忆插件套件——让你的 agent 拥有跨会话的持久记忆：记住做过的决策、沉淀踩过的教训、追踪时间线上的事件，并支持**按用户指令的定向遗忘**（已被 Bemula 基准验证为业界最强）。
+DSH（DeepSeek Harness）记忆插件套件——让你的 agent 拥有跨会话的持久记忆：记住做过的决策、沉淀踩过的教训、追踪时间线上的事件，并支持**按用户指令的定向遗忘**。
 
 零原生依赖（Node 22.5+ 自带的 SQLite + FTS5），npm 一条命令安装、零配置即用：
 **`dsh plugin --profile web add @brambledd/bramble-memory`**
+
+## 快速开始
+
+```powershell
+dsh plugin --profile web add @brambledd/bramble-memory
+```
+
+也可以在 DSH Web 界面的 **Plugins** 页面搜索 `@brambledd/bramble-memory` 点安装。
+安装后自动启用，**零配置**——数据默认放在 `~/.dsh/memory/`，重启 DSH（或等待 HMR 生效）
+新开会话即可使用。
+
+[npm 包主页](https://www.npmjs.com/package/@brambledd/bramble-memory) · 要自定义数据目录或预算，在
+profile 的 `cordis.patch.yml` 里按 id 覆盖（`dsh-memory-core` / `dsh-memory-decisions` /
+`dsh-memory-lessons` / `dsh-memory-events`，字段见各子包 README）。
+
+### 重启，开聊
+
+重启 DSH 后新开会话，agent 即拥有下表的工具。试试：
+
+> 我们之前数据库驱动是怎么选的？
+
+agent 会检索到已存的决策并给出经验证的原文。说"忘掉它"，即触发定向遗忘。
 
 ## 功能模块
 
@@ -81,27 +103,6 @@ Score = √(FE×AR) × √(PR×RLA)。Bramble 0.469 vs 论文最高 langmem 0.31
 
 跑分工具与全部迭代数据见 [scripts/bemula/](scripts/bemula/)。
 
-## 快速开始
-
-```powershell
-dsh plugin --profile web add @brambledd/bramble-memory
-```
-
-也可以在 DSH Web 界面的 **Plugins** 页面搜索 `@brambledd/bramble-memory` 点安装。
-安装后自动启用，**零配置**——数据默认放在 `~/.dsh/memory/`，重启 DSH（或等待 HMR 生效）
-新开会话即可使用。
-
-[npm 包主页](https://www.npmjs.com/package/@brambledd/bramble-memory) · 要自定义数据目录或预算，在
-profile 的 `cordis.patch.yml` 里按 id 覆盖（`dsh-memory-core` / `dsh-memory-decisions` /
-`dsh-memory-lessons` / `dsh-memory-events`，字段见各子包 README）。
-
-### 重启，开聊
-
-重启 DSH 后新开会话，agent 即拥有下表的工具。试试：
-
-> 我们之前数据库驱动是怎么选的？
-
-agent 会检索到已存的决策并给出经验证的原文。说"忘掉它"，即触发定向遗忘。
 
 ## 工具速查
 
