@@ -644,11 +644,10 @@ class BrambleAdapter(MemoryAdapter):
         prompt = (
             "The user asked to forget something. Below are candidate stored "
             "memories. Reply with STRICT JSON only: {\"remove\": [numbers of "
-            "EVERY entry the request covers]}. Rules: for topic-wide requests "
-            "remove the WHOLE topic; for time-range requests remove EVERY "
-            "entry inside the range; when unsure whether an entry is covered, "
-            "REMOVE it — under-removal leaks the deleted fact, over-removal "
-            "only loses a peripheral memory.\n\n"
+            "entries the request CLEARLY covers]}. Rules: only remove entries "
+            "the user EXPLICITLY described in their forget request; when "
+            "unsure whether an entry is covered, KEEP it — a wrongly deleted "
+            "memory is permanent.\n\n"
             f"Request: {text}\n\nCandidates:\n{listing}"
         )
         try:
@@ -692,12 +691,6 @@ class BrambleAdapter(MemoryAdapter):
     # ----------------------------------------------------------------- query
 
     def query(self, question: str) -> str:
-        # Lazy consolidation: turns observed since the last consolidation pass
-        # (e.g. relearning probes that observe fresh facts) are invisible to
-        # retrieval until they are either embedded or consolidated. The
-        # vocabulary gap between probe wording and fact wording makes the
-        # raw turn unfindable — an inference entry naming its topic domain
-        # is the bridge. Run at most once per query.
         if self._consolidated_at_turn != self._turn_index:
             self._consolidated_at_turn = self._turn_index
             self._consolidate(only_recent=True)
