@@ -276,8 +276,16 @@ class BrambleAdapter(MemoryAdapter):
         # and remove whatever still matches, until clean or budget exhausted.
         # Retrieval-based deletion is recall-limited; this is the closure
         # that keeps deleted facts out of future answers (AR/FE).
+        # For topic scope the plan's fact list replaces LLM confirmation in
+        # the residual scan: the list IS the decision, re-confirming it with
+        # the same model re-introduces the same hesitation that leaked.
+        residual_probes = plan.get("facts") or []
         for _round in range(2):
-            residual = self._residual_scan(text, last)
+            residual = (
+                self._residual_scan_by_facts(residual_probes, last)
+                if residual_probes
+                else self._residual_scan(text, last)
+            )
             if not residual:
                 break
             self._remove_with_guard(residual)
@@ -325,22 +333,55 @@ class BrambleAdapter(MemoryAdapter):
             return []
         return self._confirm_removals(text, residual_candidates[:8])
 
+    def _residual_scan_by_facts(self, fact_list: list[str], last: str | None) -> list[str]:
+        """Topic-scope residual closure: re-probe by each enumerated fact and
+        remove lexical matches without a second LLM confirmation — the fact
+        list already is the model's considered decision."""
+        residual = []
+        seen: set[str] = set()
+        for fact in fact_list:
+            hits = self.bridge.call("search", query=fact, limit=5)
+            for r in hits.get("results", []):
+                if r["anchor"] in seen or r["anchor"] == last:
+                    continue
+                seen.add(r["anchor"])
+                if self._match(fact, r):
+                    residual.append(r["anchor"])
+        return residual
+
     # ---------------------------------------------------- scope forget paths
 
     def _scope_removals(self, text: str, plan: dict[str, Any], scope: str, last: str | None) -> list[str]:
-        """Range forget: topic membership or a time window are GLOBAL
-        predicates over the whole store — retrieval similarity is the wrong
-        tool. Scan everything, decide membership, remove the hit set.
-        """
+        """Range forget. Primary path for topics: plan-enumerated fact list
+        drives precise per-fact retrieval (exhaustive generation beats
+        per-entry hesitation — the LLM lists 'social life facts' completely
+        but dithers on 'is book club social?'). Falls back to whole-store
+        membership judgment only when the plan produced no fact list.
+        Time ranges stay deterministic."""
         items = [it for it in self.bridge.call("list").get("items", []) if it.get("anchor") != last]
         if not items:
             return []
         if scope == "timerange":
             anchors = self._timerange_filter(items, plan)
-            # Time ranges are fuzzy in natural language: if the deterministic
-            # pass found nothing, fall through to the topic-style LLM pass.
             if anchors:
                 return anchors
+            return self._topic_filter(text, items)
+        fact_list = plan.get("facts") or []
+        if fact_list:
+            # fact-driven removal: locate each enumerated fact by retrieval,
+            # collect hits (no second-guess confirm — the list is already the
+            # LLM's considered decision; double confirmation doubled the
+            # hesitation that leaked facts in the first place).
+            removals: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for fact in fact_list:
+                hits = self.bridge.call("search", query=fact, limit=5)
+                for r in hits.get("results", []):
+                    if r["anchor"] in seen or r["anchor"] == last:
+                        continue
+                    seen.add(r["anchor"])
+                    removals.append(r)
+            return [r["anchor"] for r in removals]
         return self._topic_filter(text, items)
 
     def _timerange_filter(self, items: list[dict[str, Any]], plan: dict[str, Any]) -> list[str]:
@@ -364,17 +405,18 @@ class BrambleAdapter(MemoryAdapter):
         return anchors
 
     def _topic_filter(self, text: str, items: list[dict[str, Any]]) -> list[str]:
-        """LLM membership judgment over the whole store (topic-wide removal).
-        When unsure the judge is told to REMOVE — under-removal leaks the
-        deleted fact, which is the heavier penalty in this benchmark.
-        """
+        """LLM membership judgment over the whole store (fallback only —
+        the primary topic path is fact-list driven). Exhaustiveness is now
+        the fact list's job; this fallback must be PRECISE, so the unsure
+        rule is inverted to KEEP: over-deletion here costs preservation
+        while the fact list already guards efficacy."""
         listing = "\n".join(f"{i}. {str(it.get('summary') or '')[:110]}" for i, it in enumerate(items))
         prompt = (
             "The user asked to forget a whole topic/category. Below is the "
             "complete memory store. Reply with STRICT JSON only: {\"remove\": "
-            "[numbers of EVERY entry belonging to that topic or time range]}. "
-            "When unsure whether an entry belongs, REMOVE it. Entries clearly "
-            "outside the topic must be kept.\n\n"
+            "[numbers of entries that CLEARLY belong to that topic]}. When "
+            "unsure whether an entry belongs, KEEP it — only remove entries "
+            "you are confident are inside the topic.\n\n"
             f"Request: {text}\n\nStore:\n{listing}"
         )
         try:
@@ -429,31 +471,38 @@ class BrambleAdapter(MemoryAdapter):
         prompt = (
             "The user asked their assistant to forget something. Output STRICT "
             "JSON only, no markdown: {\"scope\": \"facts\" | \"topic\" | "
-            "\"timerange\", \"targets\": [up to 5 short search phrases "
-            "covering EVERYTHING to forget; for topic-wide requests list the "
-            "topic facets], \"since\": \"ISO timestamp lower bound or null\", "
+            "\"timerange\", \"targets\": [short search phrases], \"facts\": "
+            "[for topic scope ONLY: enumerate every concrete fact the user has "
+            "shared under that topic — e.g. 'member of Crouch End library book "
+            "group', 'coffee with Priya after errands'; be EXHAUSTIVE, up to 12; "
+            "write each as a searchable phrase describing the fact, not the "
+            "topic], \"since\": \"ISO timestamp lower bound or null\", "
             "\"until\": \"ISO timestamp upper bound or null\", \"replacement\": "
             "\"the new value to remember instead, or null\"}. scope='topic' "
             "when a whole category/topic should go; 'timerange' when "
             "everything within a time window should go; 'facts' otherwise. "
-            "Phrases must describe the OLD facts, not the request.\n\n"
+            "For topic scope, fact enumeration is the primary output — "
+            "targets may stay short. Phrases must describe the OLD facts, "
+            "not the request.\n\n"
             f"Request: {text}"
         )
         try:
             answer = self.llm.chat(
                 [{"role": "user", "content": prompt}],
                 temperature=0.0,
-                max_tokens=300,
+                max_tokens=500,
                 task="bramble_forget_plan",
             )
             data = _load_json_loose(answer)
             targets = [t for t in data.get("targets", []) if isinstance(t, str) and len(t) > 2][:5]
+            fact_list = [t for t in data.get("facts", []) if isinstance(t, str) and len(t) > 2][:12]
             scope = data.get("scope") if data.get("scope") in ("facts", "topic", "timerange") else "facts"
             replacement = data.get("replacement")
-            if targets or scope in ("topic", "timerange"):
+            if targets or scope in ("topic", "timerange") or fact_list:
                 return {
                     "scope": scope,
                     "targets": targets,
+                    "facts": fact_list,
                     "since": data.get("since") if isinstance(data.get("since"), str) else None,
                     "until": data.get("until") if isinstance(data.get("until"), str) else None,
                     "replacement": replacement if isinstance(replacement, str) and replacement.strip() else None,
