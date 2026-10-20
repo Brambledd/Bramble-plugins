@@ -280,6 +280,9 @@ class BrambleAdapter(MemoryAdapter):
         # the residual scan: the list IS the decision, re-confirming it with
         # the same model re-introduces the same hesitation that leaked.
         residual_probes = plan.get("facts") or []
+        if not residual_probes and scope == "topic":
+            # fallback enum may have produced the list even when plan didn't
+            residual_probes = getattr(self, "_last_topic_facts", [])
         for _round in range(2):
             residual = (
                 self._residual_scan_by_facts(residual_probes, last)
@@ -382,6 +385,24 @@ class BrambleAdapter(MemoryAdapter):
                     seen.add(r["anchor"])
                     removals.append(r)
             return [r["anchor"] for r in removals]
+        # The plan produced no fact list (models often skip the conditional
+        # field). Recover it here with a dedicated single-purpose enumeration
+        # pass over the store — the store summaries are on the table, so the
+        # model enumerates what it SEES rather than recalling from the
+        # request alone.
+        fact_list = self._enumerate_topic_facts(text, items)
+        if fact_list:
+            self._last_topic_facts = fact_list
+            removals = []
+            seen = set()
+            for fact in fact_list:
+                hits = self.bridge.call("search", query=fact, limit=5)
+                for r in hits.get("results", []):
+                    if r["anchor"] in seen or r["anchor"] == last:
+                        continue
+                    seen.add(r["anchor"])
+                    removals.append(r)
+            return [r["anchor"] for r in removals]
         return self._topic_filter(text, items)
 
     def _timerange_filter(self, items: list[dict[str, Any]], plan: dict[str, Any]) -> list[str]:
@@ -403,6 +424,36 @@ class BrambleAdapter(MemoryAdapter):
                 continue
             anchors.append(it["anchor"])
         return anchors
+
+    def _enumerate_topic_facts(self, text: str, items: list[dict[str, Any]]) -> list[str]:
+        """Dedicated store-grounded enumeration: given the full store listing
+        and the topic forget request, list every stored fact that belongs to
+        the topic. Separate from the plan call because models routinely skip
+        conditional fields inside multi-field JSON prompts; this prompt has
+        exactly one job."""
+        listing = "\n".join(f"- {str(it.get('summary') or '')[:110]}" for it in items[:120])
+        prompt = (
+            "The user asked to forget a whole topic. Below is the complete "
+            "memory store. Task: enumerate every DISTINCT fact in the store "
+            "that belongs to that topic — write each as a short searchable "
+            "phrase naming the fact itself (e.g. 'member of Crouch End "
+            "library book group', 'meets friend Priya for coffee'). Reply "
+            "with STRICT JSON only: {\"facts\": [\"...\", ...]} (up to 12). "
+            "Be EXHAUSTIVE — a missed fact is a leaked fact. Only facts you "
+            "can see in the store; do not invent.\n\n"
+            f"Request: {text}\n\nStore:\n{listing}"
+        )
+        try:
+            answer = self.llm.chat(
+                [{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=500,
+                task="bramble_topic_enum",
+            )
+            data = _load_json_loose(answer)
+            return [t for t in data.get("facts", []) if isinstance(t, str) and len(t) > 2][:12]
+        except Exception:  # noqa: BLE001
+            return []
 
     def _topic_filter(self, text: str, items: list[dict[str, Any]]) -> list[str]:
         """LLM membership judgment over the whole store (fallback only —
