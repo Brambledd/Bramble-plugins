@@ -411,13 +411,18 @@ class BrambleAdapter(MemoryAdapter):
 
     def _timerange_filter(self, items: list[dict[str, Any]], plan: dict[str, Any]) -> list[str]:
         """Deterministic date filtering via keyword date tokens (YYYY-MM-DD /
-        YYYY-MM forms written at observe time)."""
+        YYYY-MM forms written at observe time). Fresh writes are excluded —
+        relearning turns observed after deletion share date tokens with the
+        deleted range but must not be swept away."""
         since = str(plan.get("since") or "").strip()
         until = str(plan.get("until") or "").strip()
         if not since and not until:
             return []
+        fresh = self._fresh_anchors()
         anchors = []
         for it in items:
+            if it.get("anchor") in fresh:
+                continue
             dates = [k for k in (it.get("keywords") or []) if len(k) == 10 and k[4] == "-" and k[7] == "-"]
             if not dates:
                 continue
