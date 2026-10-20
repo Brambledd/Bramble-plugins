@@ -1,41 +1,41 @@
 {
-  "name": "@local/dsh-memory-core",
-  "version": "0.1.0",
-  "description": "DSH memory plugin M1: evidence store (node:sqlite + FTS5) with revision-verified recall, cue-consumption ledger, and rebuildable derived index.",
-  "type": "module",
-  "main": "index.js",
-  "exports": {
-    ".": "./index.js",
-    "./store": "./src/store.js",
-    "./scanner": "./src/scanner.js",
-    "./schema": "./src/schema.js",
-    "./util": "./src/util.js",
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "index.js",
-    "src",
-    "README.md"
-  ],
-  "scripts": {
-    "test": "node --test test/",
-    "check": "node --check index.js && node --check src/store.js && node --check src/scanner.js && node --check src/schema.js && node --check src/util.js"
-  },
-  "engines": {
-    "node": ">=22.5.0"
-  },
-  "keywords": [
-    "dsh",
-    "deepseek-harness",
-    "memory",
-    "evidence",
-    "sqlite",
-    "fts5"
-  ],
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    }
-  },
-  "license": "MIT"
+    "name":  "@local/dsh-memory-core",
+    "version":  "0.2.0",
+    "description":  "DSH memory plugin M1: evidence store (node:sqlite + FTS5) with revision-verified recall, cue-consumption ledger, and rebuildable derived index.",
+    "type":  "module",
+    "main":  "index.js",
+    "exports":  {
+                    ".":  "./index.js",
+                    "./store":  "./src/store.js",
+                    "./scanner":  "./src/scanner.js",
+                    "./schema":  "./src/schema.js",
+                    "./util":  "./src/util.js",
+                    "./package.json":  "./package.json"
+                },
+    "files":  [
+                  "index.js",
+                  "src",
+                  "README.md"
+              ],
+    "scripts":  {
+                    "test":  "node --test test/",
+                    "check":  "node --check index.js \u0026\u0026 node --check src/store.js \u0026\u0026 node --check src/scanner.js \u0026\u0026 node --check src/schema.js \u0026\u0026 node --check src/util.js"
+                },
+    "engines":  {
+                    "node":  "\u003e=22.5.0"
+                },
+    "keywords":  [
+                     "dsh",
+                     "deepseek-harness",
+                     "memory",
+                     "evidence",
+                     "sqlite",
+                     "fts5"
+                 ],
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           }
+            },
+    "license":  "MIT"
 }

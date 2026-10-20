@@ -96,7 +96,7 @@ export class EvidenceStore {
       prev !== undefined &&
       prev.source_hash === item.revision &&
       prev.updated_at !== undefined;
-    const updatedAt = unchanged ? prev.updated_at : nowIso();
+    const updatedAt = unchanged ? prev.updated_at : (item.updatedAt ?? nowIso());
     this.db
       .prepare(
         `INSERT INTO evidence_docs
@@ -296,7 +296,7 @@ export class EvidenceStore {
       .prepare(
         `SELECT d.anchor, d.source_hash FROM evidence_docs d
          LEFT JOIN evidence_vectors v ON v.anchor = d.anchor AND v.revision = d.source_hash AND v.model = ?
-         WHERE v.anchor IS NULL AND d.source_hash IS NOT NULL`,
+         WHERE v.anchor IS NULL`,
       )
       .all(this.embedding.model)
       .slice(0, batchSize);
