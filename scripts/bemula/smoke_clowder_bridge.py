@@ -77,15 +77,20 @@ r = call("search", query="bank account password", limit=5)
 assert not any("hunter2" in (h.get("summary") or "") for h in r.get("results", [])), "no resurrection via phrase"
 print("7. anti-resurrection after forced reindex ✓")
 
-# 7b. KNOWN BOUNDARY (documented, not asserted): message-level forget does
-# NOT sweep doc-level derived entries (consolidated inferences / session
-# summaries written before the forget). An attempt to add that sweep
-# regressed the benchmark (clowder_lite5b: FE/AR collapsed) because fuzzy
-# probe matching over-deleted; a content-exact sweep is future work.
-r = call("put", anchor="infer-test", text="For health, the user manages asthma with an inhaler.", keywords=["health","asthma"])
-r = call("search", query="asthma inhaler", limit=5)
-leaked = any("asthma" in (h.get("summary") or "") for h in r.get("results", []))
-print(f"7b. derived-doc boundary: inference survives message forget (known gap = {leaked})")
+# 7b. derived-doc sweep (content-exact): three cases.
+#    - pure-forgotten doc (all content from suppressed messages) → deleted
+#    - unrelated doc → kept
+#    - mixed doc (forgotten + preserved facts) → kept (conservative)
+call("put", anchor="infer-pure", text="For health, the user manages mild asthma with an inhaler daily.", keywords=["health"])
+call("put", anchor="infer-unrelated", text="For dining, the user loves the Thai place on 5th street.", keywords=["dining"])
+call("put", anchor="infer-mixed", text="For health the user manages asthma with an inhaler, and for dining the user prefers Italian restaurants.", keywords=["health","dining"])
+r = call("forget", scope="facts", targets=["asthma inhaler health"], evidenceScope="threads")
+anchors_after = {h["anchor"] for h in call("search", query="asthma inhaler health dining italian thai", limit=20).get("results", [])}
+listed = {i["anchor"] for i in call("list").get("items", [])}
+assert "infer-pure" not in listed, "pure-forgotten doc must be swept"
+assert "infer-unrelated" in listed, "unrelated doc must survive"
+assert "infer-mixed" in listed, "mixed doc must survive (conservative)"
+print("7b. derived-doc content-exact sweep: pure→deleted, unrelated→kept, mixed→kept ✓")
 
 # 8. stats
 r = call("stats")

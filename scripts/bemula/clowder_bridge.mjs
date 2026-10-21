@@ -81,11 +81,19 @@ function buildRuntime() {
           threadId: h.docAnchor.slice('thread-'.length),
           messageId: h.passageId.slice('msg-'.length),
           createdAt: h.createdAt ?? null,
+          content: h.content ?? null,
         }));
     },
     suppressMessage: async (threadId, messageId) => {
       const lease = await indexBuilder.suppressMessagePassage(threadId, messageId);
       await indexBuilder.finalizeMessagePassageSuppression(lease);
+    },
+    listNonThreadDocs: async () => {
+      await ensureInitialized();
+      return store
+        .getDb()
+        .prepare("SELECT anchor, summary FROM evidence_docs WHERE anchor NOT LIKE 'thread-%' ORDER BY anchor")
+        .all();
     },
   });
 }
