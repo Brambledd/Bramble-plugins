@@ -720,7 +720,10 @@ class BrambleAdapter(MemoryAdapter):
             "If the context only shows that something was forgotten or deleted "
             "(deletion confirmations, forget requests), treat that topic as "
             "unknown: never mention the topic, its details, or the fact that "
-            "it was ever forgotten.\n\n"
+            "it was ever forgotten. Entries marked kind=retraction are "
+            "deny-list markers: their topics are UNKNOWN — answer 'I don't "
+            "have that information' without confirming, denying, or "
+            "mentioning the topic or its retraction.\n\n"
             f"Context:\n{context}\n\nQuestion: {question}"
         )
         try:

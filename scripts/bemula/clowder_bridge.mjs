@@ -137,7 +137,7 @@ function buildRuntime() {
       await ensureInitialized();
       return store
         .getDb()
-        .prepare("SELECT anchor, summary FROM evidence_docs WHERE anchor NOT LIKE 'thread-%' ORDER BY anchor")
+        .prepare("SELECT anchor, kind, summary FROM evidence_docs WHERE anchor NOT LIKE 'thread-%' ORDER BY anchor")
         .all();
     },
     listThreadSummaries: async () => {
@@ -260,6 +260,22 @@ async function handle(req) {
           summary: item.summary ?? item.title,
           kind: item.kind,
           updatedAt: item.updatedAt,
+        });
+      }
+      // Retraction markers are ALWAYS appended (they are few): they carry
+      // the answer-time deny-list policy for forgotten topics.
+      const retractions = store
+        .getDb()
+        .prepare("SELECT anchor, title, summary FROM evidence_docs WHERE kind = 'retraction' ORDER BY anchor")
+        .all();
+      for (const r of retractions) {
+        if (out.some((o) => o.anchor === r.anchor)) continue;
+        out.push({
+          anchor: r.anchor,
+          title: r.title,
+          summary: r.summary ?? '',
+          kind: 'retraction',
+          updatedAt: null,
         });
       }
       return { ok: true, results: out.slice(0, limit) };
