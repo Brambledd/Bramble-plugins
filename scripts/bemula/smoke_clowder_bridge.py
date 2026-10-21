@@ -92,6 +92,20 @@ assert "infer-unrelated" in listed, "unrelated doc must survive"
 assert "infer-mixed" in listed, "mixed doc must survive (conservative)"
 print("7b. derived-doc content-exact sweep: pure→deleted, unrelated→kept, mixed→kept ✓")
 
+# 7c. F5 timerange at message level: December messages suppressed by window,
+# other-dated messages survive.
+call("observe", speaker="user", text="The Penang trip in December was wonderful, we stayed at a beach resort",
+     timestamp="2025-12-20T10:00:00Z", sessionId="s3", turnIndex=0)
+call("observe", speaker="user", text="My January dentist appointment is confirmed for the 15th",
+     timestamp="2026-01-10T10:00:00Z", sessionId="s3", turnIndex=1)
+r = call("forget", scope="timerange", since="2025-12-01", until="2025-12-31", evidenceScope="threads")
+assert r.get("removed", 0) >= 1, f"timerange must remove December messages, got {r}"
+r = call("search", query="Penang beach resort December", limit=5)
+assert not any("Penang" in (h.get("summary") or "") for h in r.get("results", [])), "December message gone"
+r = call("search", query="dentist appointment January", limit=5)
+assert any("dentist" in (h.get("summary") or "") for h in r.get("results", [])), "January message survives"
+print("7c. F5 timerange message-level: December suppressed, January survives ✓")
+
 # 8. stats
 r = call("stats")
 print(f"8. stats: evidence={json.dumps(r.get('evidence', {}))[:150]} threads={r.get('threads')}")

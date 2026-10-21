@@ -31,10 +31,52 @@ import { createInterface } from 'node:readline';
 
 const CLOWDER_DIST = process.env.CLOWDER_DIST ?? 'E:/ClowderAI/clowder-ai/packages/api/dist';
 import { pathToFileURL } from 'node:url';
+import { createHash } from 'node:crypto';
 const distUrl = (p) => pathToFileURL(`${CLOWDER_DIST}/${p}`).href;
 const { SqliteEvidenceStore } = await import(distUrl('domains/memory/SqliteEvidenceStore.js'));
 const { IndexBuilder } = await import(distUrl('domains/memory/IndexBuilder.js'));
 const { ForgetService } = await import(distUrl('domains/memory/forget/ForgetService.js'));
+const { VectorStore } = await import(distUrl('domains/memory/VectorStore.js'));
+
+// Hash-style embedding service — same principle as Bramble's HashEmbedding:
+// deterministic character-trigram hashing into a fixed-dim vector. Zero
+// network, zero native deps, restores the semantic lane (variant-wording
+// matches) that lexical-only retrieval misses.
+const DIM = 256;
+class HashEmbeddingService {
+  constructor() {
+    this.ready = true;
+  }
+  async load() {}
+  async embed(texts) {
+    return texts.map((t) => this.embedOne(t));
+  }
+  embedOne(text) {
+    const vec = new Float32Array(DIM);
+    const clean = String(text ?? '').toLowerCase();
+    const grams = new Set();
+    for (let i = 0; i < clean.length - 2; i += 1) grams.add(clean.slice(i, i + 3));
+    for (const g of grams) {
+      const h = createHash('sha1').update(g).digest();
+      const idx = ((h[0] << 8) | h[1]) % DIM;
+      vec[idx] += h[2] % 2 === 0 ? 1 : -1;
+    }
+    // L2 normalize
+    let norm = 0;
+    for (const v of vec) norm += v * v;
+    norm = Math.sqrt(norm) || 1;
+    for (let i = 0; i < DIM; i += 1) vec[i] /= norm;
+    return vec;
+  }
+  isReady() {
+    return this.ready;
+  }
+  async reprobeIfNeeded() {}
+  getModelInfo() {
+    return { modelId: 'hash-trigram', modelRev: 'v1', dim: DIM };
+  }
+  dispose() {}
+}
 
 // In-memory thread/message state fed by observe(); the IndexBuilder reads it
 // through the injected callbacks, exactly like production wiring.
@@ -42,6 +84,7 @@ let dir;
 let store;
 let indexBuilder;
 let forgetService;
+let embedding;
 let threads; // Map<threadId, ThreadSnapshot>
 let messages; // Map<threadId, StoredMessageSnapshot[]>
 let dirty; // Set<threadId> with un-flushed observes
@@ -54,6 +97,8 @@ function buildRuntime() {
   dir = mkdtempSync(join(tmpdir(), 'clowder-bemula-'));
   const docsRoot = join(dir, 'docs');
   mkdirSync(docsRoot, { recursive: true });
+  const embeddingSvc = new HashEmbeddingService();
+  embedding = embeddingSvc;
   store = new SqliteEvidenceStore(join(dir, 'evidence.sqlite'));
   threads = new Map();
   messages = new Map();
@@ -61,7 +106,7 @@ function buildRuntime() {
   indexBuilder = new IndexBuilder(
     store,
     docsRoot,
-    undefined, // embedDeps: lexical-only round
+    undefined, // IndexBuilder embedDeps: passage vectors stay lexical (round-1 parity)
     undefined, // transcriptDataDir
     async () => [...threads.values()],
     async (threadId, limit) => (messages.get(threadId) ?? []).slice(-(limit ?? 2000)),
@@ -95,12 +140,34 @@ function buildRuntime() {
         .prepare("SELECT anchor, summary FROM evidence_docs WHERE anchor NOT LIKE 'thread-%' ORDER BY anchor")
         .all();
     },
+    listMessagePassages: async () => {
+      await flush();
+      return store
+        .getDb()
+        .prepare("SELECT doc_anchor, passage_id, created_at, content FROM evidence_passages WHERE doc_anchor LIKE 'thread-%'")
+        .all()
+        .filter((r) => r.passage_id.startsWith('msg-'))
+        .map((r) => ({
+          threadId: r.doc_anchor.slice('thread-'.length),
+          messageId: r.passage_id.slice('msg-'.length),
+          createdAt: r.created_at ?? null,
+          content: r.content ?? null,
+        }));
+    },
   });
 }
 
 async function ensureInitialized() {
   if (!store || !store['db']) await store?.initialize?.();
   if (store && store.getDb && !store.getDb()) await store.initialize();
+  // Semantic lane (once): hash-trigram vectors in the store's own
+  // evidence_vectors vec0 table.
+  if (store && !store.__semanticWired) {
+    store.__semanticWired = true;
+    const vectorStore = new VectorStore(store.getDb(), DIM);
+    vectorStore.initMeta(embedding.getModelInfo());
+    store.setEmbedDeps({ embedding, vectorStore, mode: 'on' });
+  }
 }
 
 async function flush() {
