@@ -46,11 +46,16 @@ class _ClowderBridge(_base._Bridge):
 
     def __init__(self) -> None:
         bridge = Path(__file__).resolve().parent / "clowder_bridge.mjs"
+        err_target = (
+            open(Path(__file__).resolve().parent / "clowder_bridge_stderr.log", "a", encoding="utf-8")
+            if os.environ.get("CLOWDER_BRIDGE_LOG")
+            else subprocess.DEVNULL
+        )
         self.proc = subprocess.Popen(
             [self._node_binary(), str(bridge)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=err_target,
             text=True,
             encoding="utf-8",
             bufsize=1,
