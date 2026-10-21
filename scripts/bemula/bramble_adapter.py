@@ -721,9 +721,13 @@ class BrambleAdapter(MemoryAdapter):
             "(deletion confirmations, forget requests), treat that topic as "
             "unknown: never mention the topic, its details, or the fact that "
             "it was ever forgotten. Entries marked kind=retraction are "
-            "deny-list markers: their topics are UNKNOWN — answer 'I don't "
-            "have that information' without confirming, denying, or "
-            "mentioning the topic or its retraction.\n\n"
+            "deny-list markers: their topics are UNKNOWN as of the marker's "
+            "forgottenAt timestamp — refuse without confirming, denying, or "
+            "mentioning the topic or its retraction. EXCEPTION: if the "
+            "context contains a statement about a marker's topic with an "
+            "update time AFTER the marker's forgottenAt, that newer "
+            "statement supersedes the marker — answer with the newer "
+            "statement.\n\n"
             f"Context:\n{context}\n\nQuestion: {question}"
         )
         try:

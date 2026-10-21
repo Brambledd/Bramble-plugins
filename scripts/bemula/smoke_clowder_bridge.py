@@ -106,6 +106,21 @@ r = call("search", query="dentist appointment January", limit=5)
 assert any("dentist" in (h.get("summary") or "") for h in r.get("results", [])), "January message survives"
 print("7c. F5 timerange message-level: December suppressed, January survives ✓")
 
+# 7d. retraction supersession (RLA): a PURE forget (no replacement) writes
+# an active deny-list marker; a post-forget message reasserting the topic
+# flips it to superseded, so the deny-list cannot contradict the new fact.
+call("forget", scope="facts", targets=["favorite color"], evidenceScope="threads")
+retr_before = [(i["anchor"], i.get("status")) for i in call("list").get("items", []) if i.get("kind") == "retraction"]
+call("observe", speaker="user", text="Reminder: my favorite color is now green, not the old one",
+     timestamp="2026-03-01T10:00:00Z", sessionId="s4", turnIndex=0)
+call("flush")
+retr_after = [(i["anchor"], i.get("status")) for i in call("list").get("items", []) if i.get("kind") == "retraction"]
+sup = [a for a, s in retr_after if s == "superseded"]
+assert len(sup) >= 1, f"marker must be superseded by relearning: before={retr_before} after={retr_after}"
+r = call("search", query="favorite color green", limit=5)
+assert any("green" in (h.get("summary") or "") for h in r.get("results", [])), "new green fact findable"
+print(f"7d. retraction supersession: {len(sup)} marker(s) superseded by relearning, green fact retrievable ✓")
+
 # 8. stats
 r = call("stats")
 print(f"8. stats: evidence={json.dumps(r.get('evidence', {}))[:150]} threads={r.get('threads')}")

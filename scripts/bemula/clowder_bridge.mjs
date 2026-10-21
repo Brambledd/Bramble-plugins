@@ -229,6 +229,40 @@ async function handle(req) {
         t.title = clean.length > 120 ? `${clean.slice(0, 117)}…` : clean;
       }
       dirty.add(sessionId);
+      // Retraction supersession: a post-forget message that reasserts a
+      // retracted topic (relearning — RLA scenario) flips the marker to
+      // superseded, so the deny-list cannot contradict the new fact in
+      // answer context. Deterministic word-overlap check (>=2 shared topic
+      // words); ambiguous "casual re-mention" cases are accepted collateral
+      // at benchmark stage.
+      const msgWords = new Set(
+        clean.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 2),
+      );
+      if (msgWords.size > 0) {
+        const markers = store
+          .getDb()
+          .prepare("SELECT anchor, keywords FROM evidence_docs WHERE kind = 'retraction' AND status = 'active'")
+          .all();
+        for (const m of markers) {
+          // Clowder's upsert JSON-serializes keyword arrays; parse JSON first,
+          // fall back to comma-splitting for legacy/plain formats.
+          let topics = [];
+          try {
+            const parsed = JSON.parse(m.keywords ?? '[]');
+            if (Array.isArray(parsed)) topics = parsed;
+          } catch {
+            topics = String(m.keywords ?? '').split(',');
+          }
+          topics = topics.map((t) => String(t).toLowerCase().replace(/["[\]]/g, '').trim()).filter(Boolean);
+          const shared = topics.filter((t) => msgWords.has(t)).length;
+          if (shared >= 2) {
+            store
+              .getDb()
+              .prepare("UPDATE evidence_docs SET status = 'superseded' WHERE anchor = ?")
+              .run(m.anchor);
+          }
+        }
+      }
       return { ok: true, anchor: `thread-${sessionId}#msg-${msgId}` };
     }
     case 'flush':
@@ -335,7 +369,7 @@ async function handle(req) {
       await flush();
       const rows = store
         .getDb()
-        .prepare('SELECT anchor, kind, title, summary, keywords FROM evidence_docs ORDER BY anchor')
+        .prepare('SELECT anchor, kind, status, title, summary, keywords FROM evidence_docs ORDER BY anchor')
         .all();
       const passages = store.getDb().prepare('SELECT COUNT(*) AS n FROM evidence_passages').get();
       return {
