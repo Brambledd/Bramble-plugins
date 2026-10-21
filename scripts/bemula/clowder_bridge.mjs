@@ -140,6 +140,19 @@ function buildRuntime() {
         .prepare("SELECT anchor, summary FROM evidence_docs WHERE anchor NOT LIKE 'thread-%' ORDER BY anchor")
         .all();
     },
+    listThreadSummaries: async () => {
+      await flush();
+      return store
+        .getDb()
+        .prepare("SELECT anchor, summary FROM evidence_docs WHERE anchor LIKE 'thread-%' ORDER BY anchor")
+        .all();
+    },
+    blankThreadSummary: async (anchor) => {
+      store
+        .getDb()
+        .prepare("UPDATE evidence_docs SET summary = '' WHERE anchor = ?")
+        .run(anchor);
+    },
     listMessagePassages: async () => {
       await flush();
       return store
