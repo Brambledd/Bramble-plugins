@@ -159,6 +159,8 @@ Score = √(FE×AR) × √(PR×RLA)。Bramble 0.469 vs 论文最高 langmem 0.31
 
 **兼容哪个 DSH 版本？** 已实测兼容 0.2.0-rc.2 与 0.2.1-rc.2（最新）。
 
+**宿主包依赖方式？** `@deepseek-ai/dsh-llm` 与 `@deepseek-ai/schemastery` 是 **peerDependencies，永远不是 dependencies**——宿主提供它们；若写成依赖，hoisted profile 会在根目录落下实体副本遮蔽宿主服务提供方，导致启动致命错误（0.2.0 曾踩过，0.2.1 修复）。
+
 ## 测试与验证
 
 每个包内置测试：`node --test test/`（各包目录内执行）。端到端验收用例见 [packages/core/E2E-TEST-CASES.md](packages/core/E2E-TEST-CASES.md)。遗忘基准跑分见 [scripts/bemula/README.md](scripts/bemula/README.md)。
