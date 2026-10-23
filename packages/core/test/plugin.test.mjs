@@ -64,7 +64,7 @@ test('apply registers memory tools and prompt hint; execute paths work', async (
 
   try {
     const names = tools.map((t) => t.name).sort();
-    assert.deepEqual(names, ['memory_drill', 'memory_search', 'memory_stats']);
+    assert.deepEqual(names, ['memory_drill', 'memory_forget', 'memory_observe', 'memory_remove', 'memory_search', 'memory_stats']);
 
     assert.equal(sections.length, 1);
     assert.match(sections[0].text, /memory_search/);
@@ -72,6 +72,18 @@ test('apply registers memory tools and prompt hint; execute paths work', async (
     const search = tools.find((t) => t.name === 'memory_search');
     const drill = tools.find((t) => t.name === 'memory_drill');
     const stats = tools.find((t) => t.name === 'memory_stats');
+    const observe = tools.find((t) => t.name === 'memory_observe');
+
+    // observe execute: write + retrieve round-trip
+    const observed = await observe.execute({ text: 'The user prefers dark mode in all editors', tags: ['ui', 'preferences'] });
+    assert.ok(observed.anchor, 'observe returns an anchor');
+    const observedHit = await search.execute({ query: 'prefers dark mode editors', limit: 5 });
+    assert.ok(
+      observedHit.results.some((r) => r.anchor === observed.anchor),
+      'observed fact must be immediately retrievable',
+    );
+    const tooShort = await observe.execute({ text: 'ok' });
+    assert.ok(tooShort.error, 'short text is rejected');
 
     // search execute
     const hit = await search.execute({ query: 'sqlite driver', limit: 5 });
@@ -90,9 +102,9 @@ test('apply registers memory tools and prompt hint; execute paths work', async (
     assert.equal(stale.status, 'not_available');
     assert.equal(stale.invalidationReason, 'stale_revision');
 
-    // stats execute
+    // stats execute (5 fixtures + 1 entry written by the observe round-trip above)
     const statsValue = await stats.execute({});
-    assert.equal(statsValue.total, 5);
+    assert.equal(statsValue.total, 6);
     assert.equal(statsValue.byKind.decision, 3);
 
     // render smoke
@@ -111,7 +123,7 @@ test('apply with promptHint disabled injects no system prompt section', async ()
   await settle();
   try {
     assert.equal(sections.length, 0);
-    assert.equal(tools.length, 3);
+    assert.equal(tools.length, 6);
     const stats = tools.find((t) => t.name === 'memory_stats');
     const value = await stats.execute({});
     assert.equal(value.total, 0);

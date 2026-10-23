@@ -1,6 +1,6 @@
 {
     "name":  "@local/dsh-memory-core",
-    "version":  "0.2.1",
+    "version":  "0.3.0",
     "description":  "DSH memory plugin M1: evidence store (node:sqlite + FTS5) with revision-verified recall, cue-consumption ledger, and rebuildable derived index.",
     "type":  "module",
     "main":  "index.js",
@@ -41,5 +41,8 @@
     "peerDependencies":  {
                              "@deepseek-ai/dsh-llm":  "\u003e=0.2.0-rc.2 \u003c0.3.0",
                              "@deepseek-ai/schemastery":  "\u003e=3.18.5 \u003c4"
-                         }
+                         },
+    "devDependencies":  {
+                            "@deepseek-ai/schemastery":  "\u003e=3.18.5 \u003c4"
+                        }
 }

@@ -12,3 +12,6 @@ packages/*/node_modules/
 
 scripts/bemula/__pycache__/
 
+
+packages/capture/package-lock.json
+packages/core/package-lock.json

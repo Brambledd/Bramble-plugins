@@ -1,6 +1,7 @@
-# Bundle layer for @brambledd/bramble-memory: inserts the four plugin rows.
+# Bundle layer for @brambledd/bramble-memory: inserts the five plugin rows.
 # Zero-config: every plugin falls back to ~/.dsh/memory defaults. Override
-# any of them through your profile patch by id.
+# any of them through your profile patch by id. dsh-memory-capture needs the
+# host `llm` service; it stays idle when that service is absent.
 - insert:
     - id: dsh-memory-core
       name: "@brambledd/bramble-memory/plugins/core"
@@ -10,3 +11,10 @@
       name: "@brambledd/bramble-memory/plugins/lessons"
     - id: dsh-memory-events
       name: "@brambledd/bramble-memory/plugins/events"
+    - id: dsh-memory-capture
+      name: "@brambledd/bramble-memory/plugins/capture"
+      config:
+        autoCapture: true
+        everyNTurns: 8
+        maxFactsPerPass: 6
+        dailyMax: 40

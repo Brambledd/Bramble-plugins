@@ -1,0 +1,18 @@
+{
+  "name": "@local/dsh-memory-capture",
+  "version": "0.3.0",
+  "description": "Automatic memory capture for the bramble-memory suite: buffers conversation turns and runs periodic LLM extraction of durable facts into the shared evidence store.",
+  "type": "module",
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2 <0.3.0",
+    "@deepseek-ai/schemastery": ">=3.18.5 <4"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2 <0.3.0",
+    "@deepseek-ai/schemastery": ">=3.18.5 <4"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
