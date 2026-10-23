@@ -202,8 +202,11 @@ test('retraction marker: written on facts forget, topic words only, no fact text
     assert.match(marker.summary, /forgottenAt/);
     assert.match(marker.summary, /UNKNOWN/);
     assert.match(marker.summary, /supersedes this marker/);
-    // the marker must NOT carry the forgotten fact's own text
-    assert.equal(/basil/.test(marker.summary), false, 'fact text must not leak into the marker');
+    // the marker must NOT restate the forgotten fact's sentence — domain
+    // words from the deleted entries are deliberately included (the
+    // supersession footprint), but never the fact text itself
+    assert.equal(/extra basil/.test(marker.summary), false, 'fact phrase must not leak into the marker');
+    assert.equal(/cuisine is Thai/i.test(marker.summary), false, 'fact statement must not leak into the marker');
   } finally {
     ws.store.close();
     await rm(ws.dir, { recursive: true, force: true });

@@ -97,6 +97,15 @@ export async function executeForget(store, options) {
     candidates = multiProbeSearch(store, targets);
   }
 
+  // Phase 1b: topical gate — OR-matching probes recall broadly (any shared
+  // word matches), so candidates are validated against the request's own
+  // content words before deletion. Scope-aware: facts/timerange demand that
+  // most of the request's words appear in the entry (a mixed note carrying
+  // unrelated facts falls below the bar and survives); topic scope stays
+  // recall-first because its residue is denied at answer time by the
+  // retraction marker.
+  candidates = topicalGateFilter(candidates, targets, scope);
+
   // Phase 2: fresh-write guard
   const removable = candidates.filter((e) => !isFreshWrite(e, now, freshAfter));
   const protectedCount = candidates.length - removable.length;
@@ -134,7 +143,7 @@ export async function executeForget(store, options) {
   // sweep so captured wording also seeds the sweep.
   if (scope === 'timerange') {
     for (let round = 0; round < 2; round += 1) {
-      const acks = multiProbeSearch(store, targets).filter((e) => {
+      const acks = topicalGateFilter(multiProbeSearch(store, targets), targets, scope).filter((e) => {
         if (isFreshWrite(e, now, freshAfter)) return false;
         if (e.kind === 'retraction') return false;
         return true;
@@ -212,17 +221,26 @@ export async function executeForget(store, options) {
   // forget — including removed=0: a forget that matched nothing is exactly
   // the variant-wording case where the answer-time deny-list matters most.
   if (!replacementWritten) {
-    const topicWords = [...new Set(targets.flatMap((t) => contentWords(t)))].slice(0, 20);
+    // Marker footprint = request wording ∪ removed entries' content words.
+    // Relearning usually reuses the DOMAIN vocabulary of the forgotten facts
+    // ("joined a walking group" after deleting "library book group"), not
+    // the request's phrasing — the expanded keyword set is what lets the
+    // any-overlap supersession rule recognize it. Single words carry no
+    // fact restatement, so the no-re-leak rule still holds.
+    const topicWords = [
+      ...new Set([...targets.flatMap((t) => contentWords(t)), ...removedSummaries.flatMap((s) => contentWords(s))]),
+    ].slice(0, 30);
     if (topicWords.length > 0) {
-      const existing = findActiveRetraction(store, topicWords);
+      const existing = findActiveRetraction(store, targets.flatMap((t) => contentWords(t)));
       const forgottenAt = freshAfter
         ? new Date(Date.parse(freshAfter) || Date.now()).toISOString()
         : new Date().toISOString();
       if (existing) {
-        // Same topic forgotten again: refresh forgottenAt on the live marker
-        // instead of stacking markers.
+        // Same topic forgotten again: refresh forgottenAt + widen the
+        // keyword footprint on the live marker instead of stacking.
         const refreshed = {
           ...existing,
+          keywords: topicWords,
           summary: retractionSummary(topicWords, forgottenAt),
           updatedAt: forgottenAt,
         };
@@ -298,7 +316,13 @@ export function supersedeRetractionsForText(store, text, newAnchor) {
         .map((w) => w.trim().toLowerCase())
         .filter((w) => w.length > 2);
       const overlap = markerWords.filter((w) => textWords.has(w)).length;
-      if (overlap >= Math.max(1, Math.ceil(Math.min(markerWords.length, words.length) / 2))) {
+      // ANY-overlap rule: markers block a WHOLE topic, so the costs are
+      // asymmetric — a false-positive supersede just lifts the refusal for
+      // a genuinely new statement (mild), while a false-negative blocks
+      // relearning outright (RLA hard fail). Variant wording ("joined a
+      // walking group" vs a "social life" marker) shares domain words, not
+      // request words — one hit is enough to count as topical.
+      if (overlap >= 1) {
         store.supersede(row.anchor, newAnchor);
         superseded += 1;
       }
@@ -355,6 +379,41 @@ function contentWords(text) {
 }
 
 const DERIVED_DOC_COVERAGE_THRESHOLD = 0.35;
+
+/**
+ * Topical gate for probe candidates. Direction matters: ratio = how much of
+ * the REQUEST's content words the entry covers (not the reverse — coverage
+ * of the entry punishes information-rich docs that are legitimately about
+ * the topic). Scope-aware precision:
+ *   facts/timerange (F1/F6/F5): >=60% of the request words must appear —
+ *     these are precise asks; a mixed note carrying unrelated facts must
+ *     survive.
+ *   topic (F3): no extra gate — the request IS broad, OR-recall is the
+ *     intent, and residue is denied at answer time by the retraction marker.
+ */
+function topicalGateFilter(candidates, targets, scope) {
+  const seedWords = new Set();
+  for (const t of targets) for (const w of contentWords(t)) seedWords.add(w);
+  if (seedWords.size === 0) return candidates;
+  if (scope === 'topic') return candidates;
+  const seed = [...seedWords];
+  return candidates.filter((entry) => {
+    const hay = `${entry.title ?? ''} ${entry.summary ?? ''}`.toLowerCase();
+    let hits = 0;
+    for (const w of seed) if (hay.includes(w)) hits += 1;
+    return hits / seed.length >= 0.6;
+  });
+}
+
+/** Topical gate shared by the derived sweep: the entry's substantive words
+ *  (summary) must be sufficiently covered by the forgotten-topic seed. */
+function passesTopicalGate(entry, seedWords, threshold = DERIVED_DOC_COVERAGE_THRESHOLD) {
+  const hay = `${entry.title ?? ''} ${entry.summary ?? ''}`;
+  const docWords = contentWords(hay);
+  if (docWords.length === 0) return false;
+  const covered = docWords.filter((w) => seedWords.has(w)).length;
+  return covered / docWords.length >= threshold;
+}
 
 /**
  * Delete dynamically-written notes whose substantive content is (nearly)
@@ -520,7 +579,7 @@ async function removeEntry(store, entry, onSoftDelete) {
 
 /**
  * Residual scan: after deletion, re-probe with the original targets.
- * Returns entries that still match and are not fresh writes.
+ * Returns entries that still pass the topical gate and are not fresh writes.
  */
 function findResiduals(store, targets, scope, since, until, now, freshAfter) {
   let candidates;
@@ -529,18 +588,20 @@ function findResiduals(store, targets, scope, since, until, now, freshAfter) {
   } else {
     candidates = multiProbeSearch(store, targets);
   }
+  candidates = topicalGateFilter(candidates, targets, scope);
   return candidates.filter((e) => !isFreshWrite(e, now, freshAfter) && e.kind !== 'retraction');
 }
 
 /** Count remaining matching entries (for the summary report). */
 function countRemaining(store, targets, scope, since, until) {
   if (scope === 'timerange') {
-    return timerangeCandidates(store, since, until, targets).length;
+    return topicalGateFilter(timerangeCandidates(store, since, until, targets), targets, scope).length;
   }
   const seen = new Set();
   for (const target of targets) {
     const { items } = store.search({ query: target, limit: 20 });
     for (const item of items) seen.add(item.anchor);
   }
-  return seen.size;
+  const candidates = [...seen].map((anchor) => store.getByAnchor(anchor)).filter(Boolean);
+  return topicalGateFilter(candidates, targets, scope).length;
 }
