@@ -10,8 +10,13 @@
 // Injection mechanism mirrors @deepseek-ai/dsh-time-context: an
 // `agent/pre-step` listener appends a source-attributed user message to the
 // outgoing request, and the consumption ledger guarantees once-per-revision.
+//
+// Host packages (@deepseek-ai/dsh-llm, schemastery) are PEERS, never
+// dependencies — a hoisted copy at the profile root would shadow the host's
+// provider and brick startup (INC-20261022-01). The dsh-llm import is lazy
+// and defensive: if the symbol is unavailable the plugin degrades to a no-op
+// instead of failing activation.
 import z from '@deepseek-ai/schemastery';
-import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { mkdirSync } from 'node:fs';
@@ -63,6 +68,21 @@ export function apply(ctx, config) {
 
   ctx.effect(() => () => store.close());
 
+  // Memoized lazy import: resolution failure degrades cue injection only —
+  // the plugin activates, logs once, and stays out of the startup path.
+  let llmModPromise = null;
+  const loadMessageFactory = () => {
+    if (!llmModPromise) {
+      llmModPromise = import('@deepseek-ai/dsh-llm').catch((error) => {
+        ctx.logger?.warn?.(
+          `dsh-memory-decisions: @deepseek-ai/dsh-llm unavailable, decision cues disabled: ${error?.message ?? error}`,
+        );
+        return null;
+      });
+    }
+    return llmModPromise;
+  };
+
   if (!cfg.enabled || cfg.perTurnMax === 0 || cfg.dailyMax === 0) {
     ctx.logger?.info?.('dsh-memory-decisions: cue surfacing disabled by config');
     return;
@@ -71,7 +91,7 @@ export function apply(ctx, config) {
   ctx.on('agent/pre-step', async ({ turn, step, signal }, next) => {
     const decision = await next();
     if (decision.kind === 'reject' || signal.aborted) return decision;
-    if (step !== 1) return decision; // judge at turn open only 鈥?never mid-turn
+    if (step !== 1) return decision; // judge at turn open only — never mid-turn
     const turnText = userTextOfTurn(decision.messages, name);
     if (turnText.length < DEFAULTS.minTurnChars) return decision;
     const { candidates, cueLine } = service.evaluateTurn({
@@ -80,8 +100,10 @@ export function apply(ctx, config) {
       dailyMax: cfg.dailyMax,
     });
     if (candidates.length === 0) return decision;
+    const mod = await loadMessageFactory();
+    if (!mod?.createUserMessage) return decision; // degraded: keep budget unconsumed
     service.recordPresented(candidates); // once per (owner, anchor, revision)
-    const message = createUserMessage({
+    const message = mod.createUserMessage({
       content: [{ type: 'text', text: cueLine }],
       source: {
         kind: name,
