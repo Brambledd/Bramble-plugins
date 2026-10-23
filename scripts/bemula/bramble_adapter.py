@@ -77,7 +77,7 @@ class _Bridge:
             ["node", str(bridge)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=None,  # inherit: bridge diagnostics stream to the runner
             text=True,
             encoding="utf-8",
             bufsize=1,
@@ -213,6 +213,8 @@ class BrambleAdapter(MemoryAdapter):
                         anchor=f"infer-s{getattr(self, '_session_count', 0)}-{len(basis)}-{abs(hash(text)) % 9973}",
                         text=text.strip(),
                         keywords=["inference"] + [b for b in basis if b.startswith("turn-")][:3],
+                        # Dialogue-time provenance (fresh-write watermark)
+                        timestamp=getattr(self, "_latest_turn_ts", None),
                     )
         except Exception as exc:  # noqa: BLE001 - consolidation is best-effort
             import os as _os
@@ -231,6 +233,9 @@ class BrambleAdapter(MemoryAdapter):
         self._session_id = getattr(self, "_session_id", "s")
         idx = getattr(self, "_turn_index", 0)
         self._turn_index = idx + 1
+        # Dialogue-time watermark: entries observed at/after the forget
+        # turn's timestamp are relearning values (fresh-write protected).
+        self._latest_turn_ts = turn.timestamp or None
         result = self.bridge.call(
             "observe",
             speaker=turn.speaker,
@@ -242,6 +247,18 @@ class BrambleAdapter(MemoryAdapter):
         self._last_anchor = result.get("anchor")
         if result.get("anchor") and not result.get("skipped"):
             self._pending_anchors.append(result["anchor"])
+        # Ingest-side supersession: a turn restating a forgotten topic flips
+        # the retraction marker (relearning overrides refusal). Skipped for
+        # forget-request turns — the forget pipeline manages markers itself.
+        if result.get("anchor") and not FORGET_INTENT_RE.search(turn.text):
+            try:
+                self.bridge.call(
+                    "supersedeMarkers",
+                    text=turn.text,
+                    anchor=result.get("anchor"),
+                )
+            except Exception:  # noqa: BLE001 - best-effort
+                pass
         # A user turn that looks like a forget request triggers removal.
         if FORGET_INTENT_RE.search(turn.text):
             self._handle_forget_request(turn.text)
@@ -264,47 +281,60 @@ class BrambleAdapter(MemoryAdapter):
         if last:
             self.bridge.call("remove", anchors=[last])
             self._last_anchor = None
+
+        # Plan (Python/LLM strength): scope, targets, replacement, dates —
+        # plus store-grounded fact enumeration for topic scope when the plan
+        # skipped its facts field. Execution (deletion + fresh guard +
+        # residual loop + derived sweep + ack-capture + retraction marker +
+        # F6 replacement) is the PRODUCT pipeline, called through the bridge:
+        # the benchmark now exercises the shipped code path, not a parallel
+        # implementation.
         plan = self._plan_forget(text)
         scope = plan.get("scope") or "facts"
-        if scope in ("topic", "timerange"):
-            anchors = self._scope_removals(text, plan, scope, last)
-        else:
-            anchors = self._fact_removals(text, plan, last)
-        if anchors:
-            self._remove_with_guard(anchors)
-        # E1: residual verification loop — re-probe with the original request
-        # and remove whatever still matches, until clean or budget exhausted.
-        # Retrieval-based deletion is recall-limited; this is the closure
-        # that keeps deleted facts out of future answers (AR/FE).
-        # For topic scope the plan's fact list replaces LLM confirmation in
-        # the residual scan: the list IS the decision, re-confirming it with
-        # the same model re-introduces the same hesitation that leaked.
-        residual_probes = plan.get("facts") or []
-        if not residual_probes and scope == "topic":
-            # fallback enum may have produced the list even when plan didn't
-            residual_probes = getattr(self, "_last_topic_facts", [])
-        for _round in range(2):
-            residual = (
-                self._residual_scan_by_facts(residual_probes, last)
-                if residual_probes
-                else self._residual_scan(text, last)
-            )
-            if not residual:
-                break
-            self._remove_with_guard(residual)
-        # F6 replacement: the old value is gone; remember the new one.
-        if plan.get("replacement"):
-            self._session_id = getattr(self, "_session_id", "s")
-            idx = getattr(self, "_turn_index", 0)
-            self._turn_index = idx + 1
-            self.bridge.call(
-                "observe",
-                speaker="user",
-                text=plan["replacement"],
-                timestamp="",
-                sessionId=self._session_id,
-                turnIndex=idx,
-            )
+        targets = list(plan.get("targets") or [])
+        facts = list(plan.get("facts") or [])
+        if scope == "topic" and not facts:
+            items = [
+                it
+                for it in self.bridge.call("list").get("items", [])
+                if it.get("anchor") != last
+            ]
+            facts = self._enumerate_topic_facts(text, items)
+        merged: list[str] = []
+        seen: set[str] = set()
+        for phrase in [*targets, *facts]:
+            if phrase and phrase not in seen:
+                seen.add(phrase)
+                merged.append(phrase)
+
+        # Anti-resurrection bookkeeping stays Python-side: snapshot the
+        # inference summaries before deletion so later consolidation passes
+        # do not re-derive withdrawn conclusions.
+        rows = self.bridge.call("list").get("items", [])
+        before = {r["anchor"]: r.get("summary") for r in rows if r.get("kind") == "inference"}
+
+        result = self.bridge.call(
+            "forget",
+            scope=scope,
+            targets=merged,
+            since=plan.get("since"),
+            until=plan.get("until"),
+            replacement=plan.get("replacement"),
+            freshAfter=getattr(self, "_latest_turn_ts", None),
+        )
+        print(
+            f"[forget-plan] scope={scope} targets={merged} since={plan.get('since')} "
+            f"until={plan.get('until')} replacement={bool(plan.get('replacement'))} "
+            f"freshAfter={getattr(self, '_latest_turn_ts', None)}",
+            file=sys.stderr,
+        )
+        self._last_forget = result
+
+        after = {r["anchor"]: r.get("summary") for r in self.bridge.call("list").get("items", []) if r.get("kind") == "inference"}
+        for anchor, summary in before.items():
+            if anchor not in after and summary:
+                self._suppressed.append(summary)
+        self._last_topic_facts = []
 
     def _remove_with_guard(self, anchors: list[str]) -> None:
         """Removal with the anti-resurrection guard: withdrawn inferences are
@@ -705,8 +735,13 @@ class BrambleAdapter(MemoryAdapter):
             return "I don't have any relevant information stored."
         # C1: annotate each memory with its last-update time so relearned
         # (newer) facts can be preferred over stale ones they supersede.
+        # Retraction markers get an explicit flag — their summaries carry
+        # the answer-time deny-list policy.
         context = "\n".join(
-            f"- [updated {r.get('updatedAt', 'unknown')}] {r['summary']}" for r in results
+            f"- [updated {r.get('updatedAt', 'unknown')}]"
+            + ("[RETRACTION] " if r.get("kind") == "retraction" else "")
+            + f"{r['summary']}"
+            for r in results
         )
         prompt = (
             "You are a personal assistant with access to remembered conversation "

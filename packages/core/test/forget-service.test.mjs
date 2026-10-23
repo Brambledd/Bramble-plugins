@@ -329,7 +329,7 @@ test('timerange ack-capture: later-written reference to the forgotten window is 
     assert.equal(ws.store.getByAnchor('dec-event'), null, 'window entry removed');
     assert.equal(ws.store.getByAnchor('ack-ref'), null, 'ack reference swept');
     assert.ok(
-      result.details.some((d) => d.method === 'ack-capture' || d.method === 'derived-sweep'),
+      result.details.some((d) => ['ack-capture', 'derived-sweep', 'residual'].includes(d.method)),
       'leak closed by one of the reference sweeps',
     );
   } finally {

@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
 import { EvidenceStore } from './src/store.js';
 import { indexRoot, rebuildAll } from './src/scanner.js';
 import { createEmbeddingBackend } from './src/embedding.js';
-import { executeForget } from './src/forget-service.js';
+import { executeForget, supersedeRetractionsForText } from './src/forget-service.js';
 import { EVIDENCE_KINDS, INACTIVE_STATUSES } from './src/util.js';
 
 export const name = 'dsh-memory-core';
@@ -465,45 +465,10 @@ export function apply(ctx, config) {
     }),
   );
 
-  // Ingest-side supersession (clowder-ai 221c9d1c): when a NEW fact lands
-  // (memory_observe / F6 replacement) about a topic covered by an ACTIVE
-  // retraction marker, flip the marker to superseded — post-forget
-  // relearning overrides the answer-time refusal. Time rule: the new entry's
-  // updatedAt is always >= the marker's forgottenAt by construction (both
-  // written now), so overlap alone decides.
+  // Ingest-side supersession: delegates to the shared forget-service helper
+  // (deterministic kind listing — ranked search can hide markers).
   function supersedeRetractions(store, text, newAnchor) {
-    const words = [
-      ...new Set(
-        String(text)
-          .toLowerCase()
-          .split(/[^\p{L}\p{N}]+/u)
-          .filter((w) => w.length > 2 && !['the', 'and', 'for', 'with', 'that', 'this', 'user'].includes(w)),
-      ),
-    ];
-    if (words.length === 0) return 0;
-    // Deterministic kind listing, not ranked search: a stronger-matching doc
-    // can short-circuit progressive FTS and hide the marker entirely.
-    let superseded = 0;
-    try {
-      const rows = store.db
-        .prepare("SELECT anchor, keywords FROM evidence_docs WHERE kind = 'retraction' AND status = 'active'")
-        .all();
-      const textWords = new Set(words);
-      for (const row of rows) {
-        const markerWords = (row.keywords ?? '')
-          .split(',')
-          .map((w) => w.trim().toLowerCase())
-          .filter((w) => w.length > 2);
-        const overlap = markerWords.filter((w) => textWords.has(w)).length;
-        if (overlap >= Math.max(1, Math.ceil(Math.min(markerWords.length, words.length) / 2))) {
-          store.supersede(row.anchor, newAnchor);
-          superseded += 1;
-        }
-      }
-    } catch {
-      // supersession is best-effort
-    }
-    return superseded;
+    return supersedeRetractionsForText(store, text, newAnchor);
   }
 
   ctx.effect(() =>
