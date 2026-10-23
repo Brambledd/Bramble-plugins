@@ -1,6 +1,6 @@
 {
     "name":  "@brambledd/bramble-memory",
-    "version":  "0.3.0",
+    "version":  "0.4.0",
     "description":  "Persistent memory plugin suite for DeepSeek Harness: cross-session evidence store, decision cues, lesson distillation, temporal events, targeted unlearning. Zero config, zero native dependencies.",
     "type":  "module",
     "license":  "MIT",

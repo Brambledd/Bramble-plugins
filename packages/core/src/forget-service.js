@@ -75,9 +75,13 @@ export async function executeForget(store, options) {
   const removable = candidates.filter((e) => !isFreshWrite(e, now));
   const protectedCount = candidates.length - removable.length;
 
-  // Phase 3: execute deletion
+  // Phase 3: execute deletion (capturing summaries BEFORE removal — the
+  // store rows are gone after removeEntry, but the forgotten-content seed
+  // words for the derived sweep come from exactly these summaries)
   const details = [];
+  const removedSummaries = [];
   for (const entry of removable) {
+    if (entry.summary) removedSummaries.push(entry.summary);
     const result = await removeEntry(store, entry, onSoftDelete);
     details.push(result);
   }
@@ -88,8 +92,57 @@ export async function executeForget(store, options) {
     const residuals = findResiduals(store, targets, scope, since, until, now);
     if (residuals.length === 0) break;
     for (const entry of residuals) {
+      if (entry.summary) removedSummaries.push(entry.summary);
       await removeEntry(store, entry, onSoftDelete);
       residualRemoved += 1;
+      details.push({ anchor: entry.anchor, method: 'residual' });
+    }
+  }
+
+  // Phase 4b: derived-representation sweep (ported from clowder-ai
+  // feat/targeted-unlearning). Consolidated/observed notes written BEFORE
+  // the forget can restate the forgotten facts. A note is deleted ONLY when
+  // its own substantive content words are (nearly) fully covered by the
+  // forgotten-content seed words — a note mixing forgotten and preserved
+  // facts stays (conservative; partial residue beats collateral damage).
+  // Seed = summaries of what was actually removed (fallback: the request's
+  // own target words). Retraction markers and file-sourced docs are never
+  // swept here — markers ARE the forget's answer-time enforcement.
+  const seedWords = new Set();
+  for (const summary of removedSummaries) {
+    for (const w of contentWords(summary)) seedWords.add(w);
+  }
+  if (seedWords.size === 0) {
+    for (const t of targets) for (const w of contentWords(t)) seedWords.add(w);
+  }
+  if (seedWords.size > 0) {
+    const swept = sweepDerivedNotes(store, seedWords);
+    for (const anchor of swept) {
+      details.push({ anchor, method: 'derived-sweep' });
+      residualRemoved += 1;
+    }
+  }
+
+  // Phase 4c: timerange ack-capture — the assistant's own confirmation
+  // ("I've forgotten the December events including the Penang trip") is
+  // timestamped after the window, so the date filter spares it, yet it
+  // re-introduces the forgotten topic words into every later answer. Probe
+  // passes with NO date filter remove any entry matching the request's own
+  // wording (ported from clowder-ai 5c68d6f6).
+  if (scope === 'timerange') {
+    for (let round = 0; round < 2; round += 1) {
+      const acks = multiProbeSearch(store, targets).filter((e) => {
+        if (isFreshWrite(e, now)) return false;
+        if (e.kind === 'retraction') return false;
+        return true;
+      });
+      if (acks.length === 0) break;
+      for (const entry of acks) {
+        if (details.some((d) => d.anchor === entry.anchor)) continue;
+        await removeEntry(store, entry, onSoftDelete);
+        details.push({ anchor: entry.anchor, method: 'ack-capture' });
+        residualRemoved += 1;
+      }
     }
   }
 
@@ -110,7 +163,57 @@ export async function executeForget(store, options) {
       revision: null,
       supersededBy: null,
     });
+    // The replacement is a positive new value: any active retraction marker
+    // on this topic would contradict it at answer time — supersede it
+    // (clowder-ai 221c9d1c: F6 writes the positive value, not a deny-list).
+    const replacementTopics = [...new Set(targets.flatMap((t) => contentWords(t)))];
+    const staleMarker = replacementTopics.length > 0 ? findActiveRetraction(store, replacementTopics) : null;
+    if (staleMarker) store.supersede(staleMarker.anchor, replacementAnchor);
     replacementWritten = true;
+  }
+
+  // Phase 6: retraction marker (ported from clowder-ai e4e2f57b + 221c9d1c).
+  // Epistemic erasure, NEVER negation: the marker carries TOPIC WORDS only
+  // (from the request's own wording — never the suppressed fact text, which
+  // would re-leak it) and moves the topic to UNKNOWN as of forgottenAt.
+  // Written for EVERY non-replacement forget — including removed=0: a
+  // forget that matched nothing is exactly the variant-wording case where
+  // the answer-time deny-list matters most. A replacement writes the
+  // positive new value instead (a deny-list would contradict it). The
+  // supersession clause lets post-forget relearning (facts updated after
+  // forgottenAt) override the refusal at answer time.
+  if (!replacementWritten) {
+    const topicWords = [...new Set(targets.flatMap((t) => contentWords(t)))].slice(0, 20);
+    if (topicWords.length > 0) {
+      const existing = findActiveRetraction(store, topicWords);
+      const nowIso = new Date().toISOString();
+      if (existing) {
+        // Same topic forgotten again: refresh forgottenAt on the live marker
+        // instead of stacking markers.
+        const refreshed = {
+          ...existing,
+          summary: retractionSummary(topicWords, nowIso),
+          updatedAt: nowIso,
+        };
+        store.upsert(refreshed);
+      } else {
+        store.upsert({
+          anchor: `retract-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          kind: 'retraction',
+          status: 'active',
+          // constitutional: never demoted by recency ranking — a forgotten
+          // topic's deny-list must not fade with disuse.
+          authority: 'constitutional',
+          title: `Forgotten topic: ${topicWords.slice(0, 8).join(', ')}`,
+          summary: retractionSummary(topicWords, nowIso),
+          keywords: topicWords,
+          sourcePath: null,
+          revision: null,
+          supersededBy: null,
+          updatedAt: nowIso,
+        });
+      }
+    }
   }
 
   return {
@@ -119,8 +222,99 @@ export async function executeForget(store, options) {
     remaining: countRemaining(store, targets, scope, since, until),
     replacementWritten,
     replacementAnchor,
+    retractionMarker: !replacementWritten && targets.some((t) => contentWords(t).length > 0),
     details,
   };
+}
+
+/** The answer-time policy text carried by every retraction marker. */
+function retractionSummary(topicWords, forgottenAt) {
+  return (
+    `Retraction marker (forgottenAt: ${forgottenAt}). Topics retracted at the ` +
+    `user's request (${topicWords.slice(0, 8).join(', ')}) are UNKNOWN as of this ` +
+    'timestamp. Answer policy: refuse without confirming, denying, or ' +
+    'mentioning them — UNLESS the context contains a statement about these ' +
+    'topics updated AFTER forgottenAt, which supersedes this marker.'
+  );
+}
+
+/** Find an active retraction marker whose topic words overlap the targets.
+ *  Candidates come from a deterministic kind listing — NOT ranked search:
+ *  a stronger-matching doc can short-circuit progressive FTS and hide the
+ *  marker (verified: an AND-matching note hid the marker from the OR tier). */
+function findActiveRetraction(store, topicWords) {
+  let rows = [];
+  try {
+    rows = store.db
+      .prepare("SELECT anchor, keywords FROM evidence_docs WHERE kind = 'retraction' AND status = 'active'")
+      .all();
+  } catch {
+    return null;
+  }
+  const targets = new Set(topicWords.map((w) => w.toLowerCase()));
+  for (const row of rows) {
+    const markerWords = (row.keywords ?? '')
+      .split(',')
+      .map((w) => w.trim().toLowerCase())
+      .filter((w) => w.length > 2);
+    const overlap = markerWords.filter((w) => targets.has(w)).length;
+    if (overlap >= Math.max(1, Math.ceil(Math.min(markerWords.length, topicWords.length) / 2))) {
+      return store.getByAnchor(row.anchor);
+    }
+  }
+  return null;
+}
+
+/** Content words of a text: distinct, lowercase, stopword-filtered. */
+const SWEEP_STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'that', 'this', 'from', 'their', 'there',
+  'have', 'has', 'had', 'are', 'was', 'were', 'been', 'its', 'his', 'her',
+  'they', 'them', 'you', 'your', 'our', 'not', 'but', 'all', 'any', 'user',
+  'prefers', 'note',
+]);
+function contentWords(text) {
+  return [
+    ...new Set(
+      String(text)
+        .toLowerCase()
+        .split(/[^\p{L}\p{N}]+/u)
+        .filter((w) => w.length > 2 && !SWEEP_STOPWORDS.has(w)),
+    ),
+  ];
+}
+
+const DERIVED_DOC_COVERAGE_THRESHOLD = 0.35;
+
+/**
+ * Delete dynamically-written notes whose substantive content is (nearly)
+ * fully covered by the forgotten-content seed words. Conservative: notes
+ * mixing forgotten and preserved facts stay. Skips retraction markers and
+ * file-sourced docs (the latter retire via removeEntry's soft delete only).
+ */
+function sweepDerivedNotes(store, seedWords) {
+  const swept = [];
+  try {
+    const rows = store.db
+      .prepare(
+        "SELECT anchor FROM evidence_docs WHERE source_path IS NULL AND kind != 'retraction'",
+      )
+      .all();
+    for (const row of rows) {
+      const entry = store.getByAnchor(row.anchor);
+      if (!entry || entry.status !== 'active') continue;
+      if (!entry.summary || entry.summary.length < 20) continue;
+      const docWords = contentWords(entry.summary);
+      if (docWords.length === 0) continue;
+      const covered = docWords.filter((w) => seedWords.has(w)).length;
+      if (covered / docWords.length >= DERIVED_DOC_COVERAGE_THRESHOLD) {
+        store.removeByAnchor(entry.anchor);
+        swept.push(entry.anchor);
+      }
+    }
+  } catch {
+    // listing unavailable — skip the sweep silently
+  }
+  return swept;
 }
 
 // ---------------------------------------------------------- helper functions

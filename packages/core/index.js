@@ -49,7 +49,7 @@ export const Config = z.object({
 });
 
 const PROMPT_HINT =
-  'A persistent memory evidence store is available: at judgment points (decisions, lessons, people, past events) call memory_search first, and memory_drill (with the revision returned by search) to read the verified source. Memory capture contract: when the user shares a durable fact (preference, decision, project state, correction, commitment), silently call memory_observe with a self-contained statement — batch it, never narrate it, skip ephemeral small talk. When the user asks to FORGET/DELETE/REMOVE information from memory, parse their intent and call memory_forget with structured parameters: single fact → scope="facts" + targets=[descriptive phrases]; whole topic → scope="topic" + targets=[topic keywords]; time range → scope="timerange" + since/until dates; replace old value → scope="facts" + targets + replacement=new value text. Always confirm with the user what will be forgotten before calling memory_forget for topic/timerange scopes.';
+  'A persistent memory evidence store is available: at judgment points (decisions, lessons, people, past events) call memory_search first, and memory_drill (with the revision returned by search) to read the verified source. Memory capture contract: when the user shares a durable fact (preference, decision, project state, correction, commitment), silently call memory_observe with a self-contained statement — batch it, never narrate it, skip ephemeral small talk. Retraction markers (kind="retraction") are forget directives: when a search hits one, treat its topics as UNKNOWN — refuse without confirming, denying, or mentioning them; a statement about those topics with a LATER update timestamp supersedes the marker (answer normally, the user relearned it). When the user asks to FORGET/DELETE/REMOVE information from memory, parse their intent and call memory_forget with structured parameters: single fact → scope="facts" + targets=[descriptive phrases]; whole topic → scope="topic" + targets=[topic keywords]; time range → scope="timerange" + since/until dates; replace old value → scope="facts" + targets + replacement=new value text. Always confirm with the user what will be forgotten before calling memory_forget for topic/timerange scopes.';
 
 function resolveConfig(config) {
   const cfg = config ?? {};
@@ -465,6 +465,47 @@ export function apply(ctx, config) {
     }),
   );
 
+  // Ingest-side supersession (clowder-ai 221c9d1c): when a NEW fact lands
+  // (memory_observe / F6 replacement) about a topic covered by an ACTIVE
+  // retraction marker, flip the marker to superseded — post-forget
+  // relearning overrides the answer-time refusal. Time rule: the new entry's
+  // updatedAt is always >= the marker's forgottenAt by construction (both
+  // written now), so overlap alone decides.
+  function supersedeRetractions(store, text, newAnchor) {
+    const words = [
+      ...new Set(
+        String(text)
+          .toLowerCase()
+          .split(/[^\p{L}\p{N}]+/u)
+          .filter((w) => w.length > 2 && !['the', 'and', 'for', 'with', 'that', 'this', 'user'].includes(w)),
+      ),
+    ];
+    if (words.length === 0) return 0;
+    // Deterministic kind listing, not ranked search: a stronger-matching doc
+    // can short-circuit progressive FTS and hide the marker entirely.
+    let superseded = 0;
+    try {
+      const rows = store.db
+        .prepare("SELECT anchor, keywords FROM evidence_docs WHERE kind = 'retraction' AND status = 'active'")
+        .all();
+      const textWords = new Set(words);
+      for (const row of rows) {
+        const markerWords = (row.keywords ?? '')
+          .split(',')
+          .map((w) => w.trim().toLowerCase())
+          .filter((w) => w.length > 2);
+        const overlap = markerWords.filter((w) => textWords.has(w)).length;
+        if (overlap >= Math.max(1, Math.ceil(Math.min(markerWords.length, words.length) / 2))) {
+          store.supersede(row.anchor, newAnchor);
+          superseded += 1;
+        }
+      }
+    } catch {
+      // supersession is best-effort
+    }
+    return superseded;
+  }
+
   ctx.effect(() =>
     ctx.tools.register({
       name: 'memory_observe',
@@ -494,7 +535,7 @@ export function apply(ctx, config) {
       output: {
         schema: { type: 'object', additionalProperties: true },
         render: (_args, value) => [
-          { type: 'text', text: value.error ? `observe failed: ${value.error}` : `remembered (${value.anchor})` },
+          { type: 'text', text: value.error ? `observe failed: ${value.error}` : `remembered (${value.anchor})${value.supersededRetractions > 0 ? ` — ${value.supersededRetractions} retraction marker(s) superseded (relearning)` : ''}` },
         ],
       },
       execute(args) {
@@ -519,7 +560,11 @@ export function apply(ctx, config) {
             revision: null,
             supersededBy: null,
           });
-          return { anchor, kind: 'note' };
+          // Ingest-side supersession: a new fact about a previously forgotten
+          // topic flips the retraction marker to superseded — relearning
+          // overrides the refusal (clowder-ai 221c9d1c semantics).
+          const superseded = supersedeRetractions(store, text, anchor);
+          return { anchor, kind: 'note', supersededRetractions: superseded };
         });
       },
       presentCall: (args) => ({

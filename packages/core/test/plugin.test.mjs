@@ -133,6 +133,33 @@ test('apply with promptHint disabled injects no system prompt section', async ()
   }
 });
 
+test('memory_observe supersedes an active retraction marker on the same topic', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memory-plugin-'));
+  const { ctx, tools, disposers } = makeStubCtx();
+  apply(ctx, { dbPath: join(dir, 'evidence.sqlite'), roots: [], reindexOnStart: false, promptHint: false });
+  await settle();
+  try {
+    const forget = tools.find((t) => t.name === 'memory_forget');
+    const observe = tools.find((t) => t.name === 'memory_observe');
+    const search = tools.find((t) => t.name === 'memory_search');
+    // forget the topic → retraction marker exists
+    const fr = await forget.execute({ scope: 'facts', targets: ['crystal ball predictions'] });
+    assert.equal(fr.retractionMarker, true);
+    const hits = await search.execute({ query: 'crystal ball predictions', limit: 5 });
+    const activeMarker = hits.results.find((r) => r.kind === 'retraction' && r.active);
+    assert.ok(activeMarker, 'marker is live after forget');
+    // relearn: observe a fresh fact about the same topic → marker superseded
+    const obs = await observe.execute({ text: 'The user still enjoys crystal ball predictions at fairs' });
+    assert.equal(obs.supersededRetractions, 1, 'observe flipped the marker');
+    const after = await search.execute({ query: 'crystal ball predictions', limit: 5, });
+    const stillActive = after.results.find((r) => r.kind === 'retraction' && r.active);
+    assert.equal(stillActive, undefined, 'marker no longer active');
+  } finally {
+    for (const d of disposers) d();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('apply without config falls back to zero-config defaults (~/.dsh/memory)', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-memory-defaults-'));
   const prevHome = process.env.USERPROFILE;

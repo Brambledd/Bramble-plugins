@@ -1,18 +1,18 @@
 {
-  "name": "@local/dsh-memory-capture",
-  "version": "0.3.0",
-  "description": "Automatic memory capture for the bramble-memory suite: buffers conversation turns and runs periodic LLM extraction of durable facts into the shared evidence store.",
-  "type": "module",
-  "license": "MIT",
-  "peerDependencies": {
-    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2 <0.3.0",
-    "@deepseek-ai/schemastery": ">=3.18.5 <4"
-  },
-  "devDependencies": {
-    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2 <0.3.0",
-    "@deepseek-ai/schemastery": ">=3.18.5 <4"
-  },
-  "engines": {
-    "node": ">=22.5.0"
-  }
+    "name":  "@local/dsh-memory-capture",
+    "version":  "0.4.0",
+    "description":  "Automatic memory capture for the bramble-memory suite: buffers conversation turns and runs periodic LLM extraction of durable facts into the shared evidence store.",
+    "type":  "module",
+    "license":  "MIT",
+    "peerDependencies":  {
+                             "@deepseek-ai/dsh-llm":  "\u003e=0.2.0-rc.2 \u003c0.3.0",
+                             "@deepseek-ai/schemastery":  "\u003e=3.18.5 \u003c4"
+                         },
+    "devDependencies":  {
+                            "@deepseek-ai/dsh-llm":  "\u003e=0.2.0-rc.2 \u003c0.3.0",
+                            "@deepseek-ai/schemastery":  "\u003e=3.18.5 \u003c4"
+                        },
+    "engines":  {
+                    "node":  "\u003e=22.5.0"
+                }
 }

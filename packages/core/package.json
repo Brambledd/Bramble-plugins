@@ -1,6 +1,6 @@
 {
     "name":  "@local/dsh-memory-core",
-    "version":  "0.3.0",
+    "version":  "0.4.0",
     "description":  "DSH memory plugin M1: evidence store (node:sqlite + FTS5) with revision-verified recall, cue-consumption ledger, and rebuildable derived index.",
     "type":  "module",
     "main":  "index.js",
