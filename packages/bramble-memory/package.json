@@ -1,7 +1,7 @@
 {
     "name":  "@brambledd/bramble-memory",
-    "version":  "0.2.0",
-    "description":  "Persistent memory plugin suite for DeepSeek Harness: cross-session evidence store, decision cues, lesson distillation, temporal events. Zero config, zero native dependencies.",
+    "version":  "0.4.0",
+    "description":  "Persistent memory plugin suite for DeepSeek Harness: cross-session evidence store, decision cues, lesson distillation, temporal events, targeted unlearning. Zero config, zero native dependencies.",
     "type":  "module",
     "license":  "MIT",
     "repository":  {
@@ -13,6 +13,7 @@
                     "./plugins/decisions":  "./plugins/decisions/index.js",
                     "./plugins/lessons":  "./plugins/lessons/index.js",
                     "./plugins/events":  "./plugins/events/index.js",
+                    "./plugins/capture":  "./plugins/capture/index.js",
                     "./package.json":  "./package.json"
                 },
     "files":  [
@@ -20,10 +21,10 @@
                   "cordis.patch.yml",
                   "README.md"
               ],
-    "dependencies":  {
-                         "@deepseek-ai/schemastery":  "^3.18.5",
-                         "@deepseek-ai/dsh-llm":  "^0.0.1-rc.1"
-                     },
+    "peerDependencies":  {
+                             "@deepseek-ai/dsh-llm":  "\u003e=0.2.0-rc.2 \u003c0.3.0",
+                             "@deepseek-ai/schemastery":  "\u003e=3.18.5 \u003c4"
+                         },
     "engines":  {
                     "node":  "\u003e=22.5.0"
                 },

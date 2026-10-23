@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
 import { EvidenceStore } from './src/store.js';
 import { indexRoot, rebuildAll } from './src/scanner.js';
 import { createEmbeddingBackend } from './src/embedding.js';
-import { executeForget } from './src/forget-service.js';
+import { executeForget, supersedeRetractionsForText } from './src/forget-service.js';
 import { EVIDENCE_KINDS, INACTIVE_STATUSES } from './src/util.js';
 
 export const name = 'dsh-memory-core';
@@ -49,7 +49,7 @@ export const Config = z.object({
 });
 
 const PROMPT_HINT =
-  'A persistent memory evidence store is available: at judgment points (decisions, lessons, people, past events) call memory_search first, and memory_drill (with the revision returned by search) to read the verified source. When the user asks to FORGET/DELETE/REMOVE information from memory, parse their intent and call memory_forget with structured parameters: single fact → scope="facts" + targets=[descriptive phrases]; whole topic → scope="topic" + targets=[topic keywords]; time range → scope="timerange" + since/until dates; replace old value → scope="facts" + targets + replacement=new value text. Always confirm with the user what will be forgotten before calling memory_forget for topic/timerange scopes.';
+  'A persistent memory evidence store is available: at judgment points (decisions, lessons, people, past events) call memory_search first, and memory_drill (with the revision returned by search) to read the verified source. Memory capture contract: when the user shares a durable fact (preference, decision, project state, correction, commitment), silently call memory_observe with a self-contained statement — batch it, never narrate it, skip ephemeral small talk. Retraction markers (kind="retraction") are forget directives: when a search hits one, treat its topics as UNKNOWN — refuse without confirming, denying, or mentioning them; a statement about those topics with a LATER update timestamp supersedes the marker (answer normally, the user relearned it). When the user asks to FORGET/DELETE/REMOVE information from memory, parse their intent and call memory_forget with structured parameters: single fact → scope="facts" + targets=[descriptive phrases]; whole topic → scope="topic" + targets=[topic keywords]; time range → scope="timerange" + since/until dates; replace old value → scope="facts" + targets + replacement=new value text. Always confirm with the user what will be forgotten before calling memory_forget for topic/timerange scopes.';
 
 function resolveConfig(config) {
   const cfg = config ?? {};
@@ -459,6 +459,82 @@ export function apply(ctx, config) {
       presentCall: (args) => ({
         card: 'generic',
         title: 'Memory remove',
+        kind: 'other',
+        rawInput: args,
+      }),
+    }),
+  );
+
+  // Ingest-side supersession: delegates to the shared forget-service helper
+  // (deterministic kind listing — ranked search can hide markers).
+  function supersedeRetractions(store, text, newAnchor) {
+    return supersedeRetractionsForText(store, text, newAnchor);
+  }
+
+  ctx.effect(() =>
+    ctx.tools.register({
+      name: 'memory_observe',
+      description:
+        'Record a durable fact from the conversation into long-term memory: user preferences, decisions, project state, corrections, commitments. Call it silently at natural checkpoints when the user shares something worth remembering across sessions — do not narrate the capture. Skip ephemeral small talk.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['text'],
+        properties: {
+          text: {
+            type: 'string',
+            description: 'The fact to remember, written as a self-contained statement (e.g. "The user prefers Italian restaurants over Thai").',
+          },
+          tags: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional topical keywords to improve later retrieval (e.g. ["food", "preferences"]).',
+          },
+          kind: {
+            type: 'string',
+            enum: ['note', 'event'],
+            description: 'note (default): durable fact. event: something that happened at a point in time (commitment, milestone, incident).',
+          },
+        },
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: true },
+        render: (_args, value) => [
+          { type: 'text', text: value.error ? `observe failed: ${value.error}` : `remembered (${value.anchor})${value.supersededRetractions > 0 ? ` — ${value.supersededRetractions} retraction marker(s) superseded (relearning)` : ''}` },
+        ],
+      },
+      execute(args) {
+        return withStore((store) => {
+          const text = typeof args.text === 'string' ? args.text.trim() : '';
+          if (text.length < 4) {
+            return { error: 'text must be a self-contained statement (min 4 chars)' };
+          }
+          const anchor = `obs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          store.upsert({
+            anchor,
+            kind: args.kind === 'event' ? 'note' : 'note',
+            status: 'active',
+            authority: 'standard',
+            title: text.slice(0, 120),
+            summary: text,
+            keywords: [
+              ...text.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1).slice(0, 20),
+              ...(Array.isArray(args.tags) ? args.tags.map(String).slice(0, 10) : []),
+            ],
+            sourcePath: null,
+            revision: null,
+            supersededBy: null,
+          });
+          // Ingest-side supersession: a new fact about a previously forgotten
+          // topic flips the retraction marker to superseded — relearning
+          // overrides the refusal (clowder-ai 221c9d1c semantics).
+          const superseded = supersedeRetractions(store, text, anchor);
+          return { anchor, kind: 'note', supersededRetractions: superseded };
+        });
+      },
+      presentCall: (args) => ({
+        card: 'generic',
+        title: 'Memory observe',
         kind: 'other',
         rawInput: args,
       }),

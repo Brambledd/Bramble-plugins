@@ -24,6 +24,7 @@ import { createInterface } from 'node:readline';
 import { EvidenceStore } from '../../packages/core/src/store.js';
 import { EventStore } from '../../packages/events/src/event-store.js';
 import { computeRevision } from '../../packages/core/src/util.js';
+import { executeForget, supersedeRetractionsForText } from '../../packages/core/src/forget-service.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'bramble-bemula-'));
 const store = new EvidenceStore(join(dir, 'evidence.sqlite'));
@@ -53,6 +54,9 @@ function observe({ speaker, text, timestamp, sessionId, turnIndex }) {
     sourcePath: null,
     revision: computeRevision(clean),
     supersededBy: null,
+    // Truthful dialogue provenance: the fresh-write watermark compares
+    // dialogue time against the forget point (freshAfter), not wall clock.
+    updatedAt: stamp || undefined,
   };
   store.upsert(item);
   // Keep the vector lane warm for semantic probes.
@@ -60,17 +64,41 @@ function observe({ speaker, text, timestamp, sessionId, turnIndex }) {
   return { ok: true, anchor };
 }
 
-function handle(req) {
+async function handle(req) {
   switch (req.op) {
     case 'reset':
       store.wipe();
       return { ok: true };
+    case 'forget':
+      // Product forget pipeline (0.4.x): scope-routed deletion + fresh guard
+      // + residual loop + derived sweep + timerange ack-capture + retraction
+      // marker + F6 replacement. The Python adapter plans; this executes.
+      // freshAfter = dialogue timestamp of the forget turn: replay-safe
+      // fresh-write watermark (entries observed after this point are
+      // relearning values and stay protected).
+      console.error(`[bridge:forget] scope=${req.scope} targets=${JSON.stringify(req.targets)} since=${req.since} until=${req.until} freshAfter=${req.freshAfter}`);
+      {
+        const result = await executeForget(store, {
+          scope: req.scope,
+          targets: Array.isArray(req.targets) ? req.targets.map(String) : [],
+          since: req.since,
+          until: req.until,
+          replacement: req.replacement,
+          freshAfter: req.freshAfter || null,
+        });
+        console.error(`[bridge:forget] removed=${result.removed} protected=${result.protected} remaining=${result.remaining} replacement=${result.replacementWritten}`);
+        return result;
+      }
     case 'observe':
       return observe(req);
     case 'search': {
       const { items } = store.search({
         query: String(req.query ?? ''),
         limit: Math.min(20, Math.max(1, req.limit ?? 5)),
+        // Replay corpus: entries carry DIALOGUE timestamps, so wall-clock
+        // recency decay is meaningless here and sinks early-session facts
+        // out of top-k (RA collapse in lite6a). Live product keeps decay.
+        recencyDecay: false,
       });
       const detailed = store.db
         .prepare('SELECT anchor, updated_at FROM evidence_docs')
@@ -108,6 +136,16 @@ function handle(req) {
       });
       return { ok: true, inserted: result.inserted, suppressed: result.suppressed === true };
     }
+    case 'supersedeMarkers': {
+      // Ingest-side supersession: a newly observed turn restating a
+      // forgotten topic flips the marker (relearning overrides refusal).
+      const superseded = supersedeRetractionsForText(
+        store,
+        String(req.text ?? ''),
+        String(req.anchor ?? ''),
+      );
+      return { ok: true, superseded };
+    }
     case 'eventSearch': {
       const found = events.search({
         query: req.query,
@@ -120,6 +158,7 @@ function handle(req) {
       const clean = String(req.text ?? '').trim();
       if (clean.length === 0) return { ok: true, skipped: true };
       const anchor = String(req.anchor ?? `infer-${Date.now()}`);
+      const stamp = String(req.timestamp ?? '').trim();
       store.upsert({
         anchor,
         kind: 'inference',
@@ -131,6 +170,8 @@ function handle(req) {
         sourcePath: null,
         revision: computeRevision(clean),
         supersededBy: null,
+        // Dialogue-time provenance for the fresh-write watermark
+        updatedAt: stamp || undefined,
       });
       void store.embedBackfill({ batchSize: 8 }).catch(() => {});
       return { ok: true, anchor };
@@ -156,7 +197,7 @@ for await (const line of rl) {
   let response;
   try {
     req = JSON.parse(trimmed);
-    response = handle(req);
+    response = await handle(req);
   } catch (error) {
     response = { ok: false, error: error.message };
   }

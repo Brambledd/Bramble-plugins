@@ -1,0 +1,98 @@
+// Auto-capture service tests: extraction parsing, dedup, budget meter.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { EvidenceStore } from '../../core/src/store.js';
+import {
+  captureSystemPrompt,
+  captureUserPrompt,
+  isDuplicate,
+  overlapsEntry,
+  parseFacts,
+  runCapturePass,
+  todayCapturedCount,
+} from '../src/capture-service.js';
+
+async function tempStore() {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-capture-'));
+  const store = new EvidenceStore(join(dir, 'evidence.sqlite'));
+  return { dir, store };
+}
+
+test('parseFacts: strict JSON, tolerant JSON-in-text, caps and length filters', () => {
+  const strict = '{"facts":["The user prefers dark mode","The user lives in Hangzhou"]}';
+  assert.deepEqual(parseFacts(strict, 6).length, 2);
+  const noisy = 'Sure! Here you go:\n```json\n{"facts":["The user uses pnpm as their package manager"]}\n```';
+  assert.equal(parseFacts(noisy, 6).length, 1);
+  assert.deepEqual(parseFacts('no json at all', 6), []);
+  // dedup within batch + length bounds
+  const dup = '{"facts":["The user likes tea","the user   likes tea","ok","' + 'x'.repeat(300) + '"]}';
+  const parsed = parseFacts(dup, 6);
+  assert.equal(parsed.length, 1);
+  // maxFacts cap
+  const many = '{"facts":["a1b2c3d4e5","f6g7h8i9j0","k1l2m3n4o5","p6q7r8s9t0"]}';
+  assert.equal(parseFacts(many, 2).length, 2);
+});
+
+test('overlapsEntry + isDuplicate: near-duplicate detection', async () => {
+  const { dir, store } = await tempStore();
+  try {
+    store.upsert({
+      anchor: 'have-1', kind: 'note', status: 'active', authority: 'standard',
+      title: 'User prefers dark mode', summary: 'The user prefers dark mode in all editors and terminals',
+      keywords: [], sourcePath: null, revision: null, supersededBy: null,
+      updatedAt: new Date(Date.now() - 3_600_000).toISOString(),
+    });
+    assert.ok(overlapsEntry('The user prefers dark mode themes', store.getByAnchor('have-1')));
+    assert.ok(isDuplicate(store, 'The user prefers dark mode themes'));
+    assert.equal(isDuplicate(store, 'The user is learning to play the cello'), false);
+  } finally {
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('runCapturePass: writes new facts, skips duplicates, redacts secrets', async () => {
+  const { dir, store } = await tempStore();
+  try {
+    store.upsert({
+      anchor: 'have-1', kind: 'note', status: 'active', authority: 'standard',
+      title: 'User prefers dark mode', summary: 'The user prefers dark mode in all editors',
+      keywords: [], sourcePath: null, revision: null, supersededBy: null,
+      updatedAt: new Date(Date.now() - 3_600_000).toISOString(),
+    });
+    const answer = JSON.stringify({
+      facts: [
+        'The user prefers dark mode in all editors',
+        'The user is migrating their blog from WordPress to Astro',
+        'Their deploy token is ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234',
+      ],
+    });
+    const result = await runCapturePass(
+      store,
+      async () => answer,
+      { turnTexts: ['t1', 't2'], maxFacts: 6, redact: true },
+    );
+    assert.equal(result.written, 2, 'duplicate skipped, two new facts written');
+    assert.equal(result.skipped, 1);
+    assert.ok(result.redactions >= 1, 'token was redacted');
+    const stored = [...result.facts];
+    assert.ok(stored.some((f) => f.includes('[api-key]')), 'redaction tag present');
+    // daily meter counts the cap-* writes
+    assert.ok(todayCapturedCount(store) >= 2);
+  } finally {
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('prompts: known entries + numbered turns', () => {
+  const sys = captureSystemPrompt(6);
+  assert.match(sys, /STRICT JSON/);
+  assert.match(sys, /at most 6 facts/);
+  const user = captureUserPrompt(['Known fact one'], ['turn text A', 'turn text B']);
+  assert.match(user, /Known memory entries/);
+  assert.match(user, /【turn 1】turn text A/);
+});

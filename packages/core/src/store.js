@@ -216,6 +216,9 @@ export class EvidenceStore {
     if (recencyDecay) {
       const now = Date.now();
       for (const entry of scored) {
+        // Retraction markers are exempt: a forgotten topic's deny-list must
+        // not fade with disuse (clowder-ai constitutional semantics).
+        if (entry.item.kind === 'retraction') continue;
         // RRF scores are higher-is-better; decay ∈ (0,1] so its log is a
         // negative bonus — stale rows sink without dominating lexical rank.
         entry.score += Math.log(computeRecencyDecay(entry.item.updatedAt, entry.item.kind, now));

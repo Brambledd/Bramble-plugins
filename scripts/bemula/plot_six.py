@@ -14,12 +14,14 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 RESULTS = Path(r"E:\ClowderAI\bemula-benchmark\results")
 
-ours = json.loads((RESULTS / "bramble_lite5l" / "metrics.json").read_text(encoding="utf-8"))
+ours = json.loads((RESULTS / "bramble_lite6b" / "metrics.json").read_text(encoding="utf-8"))
 
 runs = {}
 for d in sorted(RESULTS.iterdir()):
     m = d / "metrics.json"
-    if not m.exists() or d.name.startswith("bramble"):
+    if not m.exists() or d.name.startswith(("bramble", "clowder")):
+        # 'bramble' = our runs; 'clowder' = our clowder-ai port experiments —
+        # neither is a paper baseline
         continue
     data = json.loads(m.read_text(encoding="utf-8"))
     sys_name = d.name.split("_full_")[0].split("_lite_")[0]
