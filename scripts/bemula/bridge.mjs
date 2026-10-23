@@ -95,6 +95,10 @@ async function handle(req) {
       const { items } = store.search({
         query: String(req.query ?? ''),
         limit: Math.min(20, Math.max(1, req.limit ?? 5)),
+        // Replay corpus: entries carry DIALOGUE timestamps, so wall-clock
+        // recency decay is meaningless here and sinks early-session facts
+        // out of top-k (RA collapse in lite6a). Live product keeps decay.
+        recencyDecay: false,
       });
       const detailed = store.db
         .prepare('SELECT anchor, updated_at FROM evidence_docs')
