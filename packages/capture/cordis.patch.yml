@@ -1,0 +1,4 @@
+# Bundle layer for @local/dsh-memory-capture: inserts the plugin entry.
+- insert:
+    - id: dsh-memory-capture
+      name: "@local/dsh-memory-capture"

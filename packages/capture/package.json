@@ -14,5 +14,16 @@
                         },
     "engines":  {
                     "node":  "\u003e=22.5.0"
-                }
+                },
+    "files":  [
+                  "index.js",
+                  "src",
+                  "cordis.patch.yml",
+                  "README.md"
+              ],
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           }
+            }
 }
