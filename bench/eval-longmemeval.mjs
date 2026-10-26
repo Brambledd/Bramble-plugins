@@ -48,50 +48,83 @@ function apiEmbedder() {
     model,
     async embed(texts) {
       const out = new Array(texts.length);
-      // adaptive batching: Zhipu 1210 (param error) on over-long batches —
-      // halve recursively until the request is accepted
-      const send = async (batch, offset) => {
+      // sanitizer: control chars and lone surrogates trip Zhipu 1210
+      const clean = (t) => t
+        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, ' ')
+        .replace(/[\uD800-\uDFFF]/g, '')
+        .trim();
+      // send one text, halving its LENGTH on 400 (some texts exceed the
+      // model's input-token budget even under EMBED_TRUNC chars); gives up
+      // below 200 chars and leaves the slot undefined (skipped by backfill)
+      const sendOne = async (text, slot, offset, depth = 0) => {
         for (let attempt = 0; ; attempt += 1) {
           try {
             const res = await fetch(`${API_BASE}/embeddings`, {
               method: 'POST',
               headers: { 'content-type': 'application/json', authorization: `Bearer ${ENV.OPENAI_API_KEY}` },
-              body: JSON.stringify({ model, input: batch }),
+              body: JSON.stringify({ model, input: [text] }),
               signal: AbortSignal.timeout(60_000),
             });
             if (!res.ok) {
-              const bodyText = await res.text().catch(() => '');
-              // oversized batch: split and retry each half
-              if (res.status === 400 && batch.length > 1) {
-                const mid = Math.floor(batch.length / 2);
-                await send(batch.slice(0, mid), offset);
-                await send(batch.slice(mid), offset + mid);
+              if (res.status === 400 && text.length > 200 && depth < 6) {
+                await sendOne(text.slice(0, Math.floor(text.length / 2)), slot, offset, depth + 1);
                 return;
               }
-              throw new Error(`HTTP ${res.status}: ${bodyText.slice(0, 300)}`);
+              const bodyText = await res.text().catch(() => '');
+              throw new Error(`HTTP ${res.status}: ${bodyText.slice(0, 200)}`);
             }
             const body = await res.json();
-            for (const d of body.data.slice().sort((a, b) => a.index - b.index)) {
-              out[offset + d.index] = Float32Array.from(d.embedding);
-            }
+            out[offset + body.data[0].index] = Float32Array.from(body.data[0].embedding);
             return;
           } catch (error) {
-            if (error.message.startsWith('HTTP 400') && batch.length > 1) {
-              const mid = Math.floor(batch.length / 2);
-              await send(batch.slice(0, mid), offset);
-              await send(batch.slice(mid), offset + mid);
+            const halvable = text.length > 200 && depth < 6;
+            if (error.message.startsWith('HTTP 400') && halvable) {
+              await sendOne(text.slice(0, Math.floor(text.length / 2)), slot, offset, depth + 1);
               return;
             }
-            if (attempt >= 2) throw error;
+            if (attempt >= 2) {
+              console.error(`  embed skip (${String(slot + 1)}/${texts.length}): ${error.message.slice(0, 120)}`);
+              return; // leave slot undefined — backfill skips null vectors
+            }
             await new Promise((r) => setTimeout(r, 1500 * 2 ** attempt));
           }
         }
       };
+      // adaptive batch: 1210 on over-long BATCHES — halve recursively
+      const send = async (batch, offset) => {
+        if (batch.length > 1) {
+          for (let attempt = 0; ; attempt += 1) {
+            try {
+              const res = await fetch(`${API_BASE}/embeddings`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json', authorization: `Bearer ${ENV.OPENAI_API_KEY}` },
+                body: JSON.stringify({ model, input: batch }),
+                signal: AbortSignal.timeout(120_000),
+              });
+              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+              const body = await res.json();
+              for (const d of body.data.slice().sort((a, b) => a.index - b.index)) {
+                out[offset + d.index] = Float32Array.from(d.embedding);
+              }
+              return;
+            } catch {
+              if (attempt >= 1) break; // fall through to per-item sends
+              await new Promise((r) => setTimeout(r, 1500));
+            }
+          }
+          const mid = Math.floor(batch.length / 2);
+          await send(batch.slice(0, mid), offset);
+          await send(batch.slice(mid), offset + mid);
+          return;
+        }
+        await sendOne(clean(batch[0] ?? ''), offset, 0);
+      };
       for (let i = 0; i < texts.length; i += 16) {
-        const batch = texts.slice(i, i + 16).map((t) => t.slice(0, EMBED_TRUNC));
-        await send(batch, i);
+        await send(texts.slice(i, i + 16).map((t) => t.slice(0, EMBED_TRUNC)), i);
       }
-      return out.filter(Boolean);
+      // DENSE array with holes — embedBackfill matches vectors to rows by
+      // index; compacting here would attach vectors to the wrong anchors.
+      return out;
     },
   };
 }

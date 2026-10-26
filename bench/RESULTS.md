@@ -59,6 +59,10 @@ BM25 与 hash-hybrid **零分歧**（exact 0.33/0.33，2char 0.25/0.25，synonym
 - ~~cleaned 版复跑~~ → **已解决（检索侧）**：cleaned S 470 题 R@1 0.802 / R@5 0.928 / MRR 0.859（略优于原版，系统对数据清洗鲁棒）；cleaned 版 QA 未跑（预算约束）；
 - ~~abstention 未覆盖~~ → **已解决**：30 题拒答准确率 96.7%（错 1 例为拒答不足）。
 
+## 真嵌入对照（尝试，受阻于配额）
+
+Zhipu `embedding-3`（2048 维）端点可用，harness 已支持 `--embedder api`（自适应批处理 + 文本消毒 + 超长减半 + 逐条降级）。100 题配对实验（同子集 BM25 R@1 0.77 / R@3 0.90 / R@5 0.92）在嵌入阶段因 **429 错误 1113「余额不足或无可用资源包」中断**——全量 QA 的 glm-5.3 调用耗尽了 coding-plan 余额（.env 内注释预警过的正是此错误码）。充值后单命令可续：`node bench/eval-longmemeval.mjs --data s --limit 100 --mode session --embedder api --out bench/results/s100-session-embed3.json`。在此之前 `vector.enabled` 保持 opt-in 是唯一有数据支撑的选择。
+
 ## 复现
 
 ```bash
