@@ -15,7 +15,8 @@ import { homedir } from 'node:os';
 import { EvidenceStore } from './src/store.js';
 import { indexRoot, rebuildAll } from './src/scanner.js';
 import { createEmbeddingBackend } from './src/embedding.js';
-import { executeForget, supersedeRetractionsForText } from './src/forget-service.js';
+import { executeForget } from './src/forget-service.js';
+import { ingestMemory } from './src/ingest-service.js';
 import { EVIDENCE_KINDS, INACTIVE_STATUSES } from './src/util.js';
 
 export const name = 'dsh-memory-core';
@@ -465,17 +466,11 @@ export function apply(ctx, config) {
     }),
   );
 
-  // Ingest-side supersession: delegates to the shared forget-service helper
-  // (deterministic kind listing — ranked search can hide markers).
-  function supersedeRetractions(store, text, newAnchor) {
-    return supersedeRetractionsForText(store, text, newAnchor);
-  }
-
   ctx.effect(() =>
     ctx.tools.register({
       name: 'memory_observe',
       description:
-        'Record a durable fact from the conversation into long-term memory: user preferences, decisions, project state, corrections, commitments. Call it silently at natural checkpoints when the user shares something worth remembering across sessions — do not narrate the capture. Skip ephemeral small talk.',
+        'Record a durable fact from the conversation into long-term memory: user preferences, decisions, project state, corrections, commitments. Runs the unified ingest pipeline: exact restatements are NOOPs, variant restatements supersede the old entry (Mem0 UPDATE semantics), and relearning supersedes retraction markers. Call it silently at natural checkpoints when the user shares something worth remembering across sessions — do not narrate the capture. Skip ephemeral small talk.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -488,7 +483,15 @@ export function apply(ctx, config) {
           tags: {
             type: 'array',
             items: { type: 'string' },
-            description: 'Optional topical keywords to improve later retrieval (e.g. ["food", "preferences"]).',
+            description: 'Optional topical keywords to improve later retrieval (e.g. ["food", "preferences"]). Tag a statement "preference" when it states a standing user preference — preference cues surface those proactively.',
+          },
+          date: {
+            type: 'string',
+            description: 'Optional YYYY-MM-DD calendar day the fact refers to (enables temporal search and time-windowed forgetting).',
+          },
+          importance: {
+            type: 'number',
+            description: 'Optional 1-5 rating (Generative Agents scale): 5 for identity/core preferences and standing decisions, 1 for trivia. Default 1.',
           },
           kind: {
             type: 'string',
@@ -500,36 +503,21 @@ export function apply(ctx, config) {
       output: {
         schema: { type: 'object', additionalProperties: true },
         render: (_args, value) => [
-          { type: 'text', text: value.error ? `observe failed: ${value.error}` : `remembered (${value.anchor})${value.supersededRetractions > 0 ? ` — ${value.supersededRetractions} retraction marker(s) superseded (relearning)` : ''}` },
+          { type: 'text', text: value.error ? `observe failed: ${value.error}` : value.decision === 'noop'
+            ? `already known (${value.anchor})`
+            : `remembered (${value.anchor}${value.decision === 'update' ? `, superseded previous ${value.supersededNote}` : ''})${value.supersededRetractions > 0 ? ` — ${value.supersededRetractions} retraction marker(s) superseded (relearning)` : ''}` },
         ],
       },
       execute(args) {
         return withStore((store) => {
-          const text = typeof args.text === 'string' ? args.text.trim() : '';
-          if (text.length < 4) {
-            return { error: 'text must be a self-contained statement (min 4 chars)' };
-          }
-          const anchor = `obs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-          store.upsert({
-            anchor,
-            kind: args.kind === 'event' ? 'note' : 'note',
-            status: 'active',
-            authority: 'standard',
-            title: text.slice(0, 120),
-            summary: text,
-            keywords: [
-              ...text.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1).slice(0, 20),
-              ...(Array.isArray(args.tags) ? args.tags.map(String).slice(0, 10) : []),
-            ],
-            sourcePath: null,
-            revision: null,
-            supersededBy: null,
+          const result = ingestMemory(store, {
+            text: args.text,
+            tags: Array.isArray(args.tags) ? args.tags : [],
+            source: 'observe',
+            date: typeof args.date === 'string' ? args.date : null,
+            importance: typeof args.importance === 'number' ? args.importance : 1,
           });
-          // Ingest-side supersession: a new fact about a previously forgotten
-          // topic flips the retraction marker to superseded — relearning
-          // overrides the refusal (clowder-ai 221c9d1c semantics).
-          const superseded = supersedeRetractions(store, text, anchor);
-          return { anchor, kind: 'note', supersededRetractions: superseded };
+          return result.error ? result : { ...result, kind: 'note' };
         });
       },
       presentCall: (args) => ({

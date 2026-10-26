@@ -21,7 +21,13 @@ import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { EvidenceStore } from '../core/src/store.js';
-import { createDecisionCueService, userTextOfTurn } from './src/cue-service.js';
+import {
+  createDecisionCueService,
+  evaluatePreferenceCues,
+  globalPresentedToday,
+  recordPreferencePresented,
+  userTextOfTurn,
+} from './src/cue-service.js';
 
 export const name = 'dsh-memory-decisions';
 
@@ -31,6 +37,8 @@ const DEFAULTS = {
   perTurnMax: 1,
   dailyMax: 10,
   minTurnChars: 4,
+  prefPerTurnMax: 1,
+  prefDailyQuota: 3,
 };
 
 export const Config = z.object({
@@ -38,6 +46,8 @@ export const Config = z.object({
   owner: z.string().description('Consumption-ledger owner (single-user default: "default").'),
   perTurnMax: z.number().description('Maximum decision cues injected per turn.'),
   dailyMax: z.number().description('Maximum decision cues injected per UTC day (0 disables).'),
+  prefPerTurnMax: z.number().description('Maximum preference reminders injected per turn.'),
+  prefDailyQuota: z.number().description('Maximum preference reminders per UTC day (rotates daily; 0 disables).'),
   enabled: z.boolean().description('Master switch (config-level kill switch).'),
 });
 
@@ -51,6 +61,8 @@ function resolveConfig(config) {
     owner: typeof cfg.owner === 'string' && cfg.owner.length > 0 ? cfg.owner : 'default',
     perTurnMax: clampInt(cfg.perTurnMax, 0, 5, DEFAULTS.perTurnMax),
     dailyMax: clampInt(cfg.dailyMax, 0, 1000, DEFAULTS.dailyMax),
+    prefPerTurnMax: clampInt(cfg.prefPerTurnMax, 0, 3, DEFAULTS.prefPerTurnMax),
+    prefDailyQuota: clampInt(cfg.prefDailyQuota, 0, 50, DEFAULTS.prefDailyQuota),
     enabled: cfg.enabled !== false,
   };
 }
@@ -83,7 +95,7 @@ export function apply(ctx, config) {
     return llmModPromise;
   };
 
-  if (!cfg.enabled || cfg.perTurnMax === 0 || cfg.dailyMax === 0) {
+  if (!cfg.enabled || (cfg.perTurnMax === 0 && cfg.prefPerTurnMax === 0)) {
     ctx.logger?.info?.('dsh-memory-decisions: cue surfacing disabled by config');
     return;
   }
@@ -94,23 +106,49 @@ export function apply(ctx, config) {
     if (step !== 1) return decision; // judge at turn open only — never mid-turn
     const turnText = userTextOfTurn(decision.messages, name);
     if (turnText.length < DEFAULTS.minTurnChars) return decision;
-    const { candidates, cueLine } = service.evaluateTurn({
-      turnText,
-      perTurnMax: cfg.perTurnMax,
-      dailyMax: cfg.dailyMax,
-    });
-    if (candidates.length === 0) return decision;
+
+    const injections = [];
+    // Family 1: accepted decisions (once per revision; family-scoped budget).
+    if (cfg.perTurnMax > 0 && cfg.dailyMax > 0) {
+      const { candidates, cueLine } = service.evaluateTurn({
+        turnText,
+        perTurnMax: cfg.perTurnMax,
+        dailyMax: cfg.dailyMax,
+      });
+      if (candidates.length > 0) injections.push({ candidates, cueLine, family: 'decision' });
+    }
+    // Family 2: standing preferences (daily rotation; family quota + the
+    // global cross-family ceiling so the two families can never jointly
+    // flood the context — the coordination contract of the cue plane).
+    if (cfg.prefPerTurnMax > 0 && cfg.prefDailyQuota > 0) {
+      const globalRemaining = cfg.dailyMax - globalPresentedToday(store, cfg.owner);
+      const pref = evaluatePreferenceCues(store, {
+        owner: cfg.owner,
+        turnText,
+        perTurnMax: cfg.prefPerTurnMax,
+        dailyQuota: cfg.prefDailyQuota,
+        globalRemaining,
+      });
+      if (pref.candidates.length > 0) injections.push({ candidates: pref.candidates, cueLine: pref.cueLine, family: 'preference' });
+    }
+    if (injections.length === 0) return decision;
+
     const mod = await loadMessageFactory();
     if (!mod?.createUserMessage) return decision; // degraded: keep budget unconsumed
-    service.recordPresented(candidates); // once per (owner, anchor, revision)
-    const message = mod.createUserMessage({
-      content: [{ type: 'text', text: cueLine }],
-      source: {
-        kind: name,
-        form: 'snapshot',
-        sections: [{ name: 'decision-cues', text: cueLine }],
-      },
-    });
-    return { ...decision, messages: [...decision.messages, message] };
+    const messages = [...decision.messages];
+    for (const injection of injections) {
+      if (injection.family === 'decision') service.recordPresented(injection.candidates);
+      else recordPreferencePresented(store, { owner: cfg.owner }, injection.candidates);
+      const message = mod.createUserMessage({
+        content: [{ type: 'text', text: injection.cueLine }],
+        source: {
+          kind: name,
+          form: 'snapshot',
+          sections: [{ name: `${injection.family}-cues`, text: injection.cueLine }],
+        },
+      });
+      messages.push(message);
+    }
+    return { ...decision, messages };
   });
 }

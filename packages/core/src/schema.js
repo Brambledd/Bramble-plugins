@@ -34,7 +34,21 @@ CREATE TABLE IF NOT EXISTS evidence_docs (
   source_path TEXT,
   source_hash TEXT,
   superseded_by TEXT,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  last_accessed TEXT,
+  importance REAL NOT NULL DEFAULT 1
+);
+`;
+
+// A-MEM-style lightweight memory links (anchor <-> anchor similarity edges).
+// Derived data: rebuilt by the ingest pipeline, cleaned by removeByAnchor.
+const LINKS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS evidence_links (
+  anchor TEXT NOT NULL,
+  linked_anchor TEXT NOT NULL,
+  score REAL NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (anchor, linked_anchor)
 );
 `;
 
@@ -167,4 +181,31 @@ export function applySchema(db) {
   for (const stmt of FTS_TRIGGERS) db.exec(stmt);
   db.exec(LEDGER_SCHEMA);
   db.exec(VECTOR_SCHEMA);
+  db.exec(LINKS_SCHEMA);
+  migrateAdditive(db);
+}
+
+/**
+ * Additive, backward-compatible column migrations for databases created by
+ * older schema builds. Deliberately does NOT bump user_version: a version
+ * reset would wipe dynamically-written rows (obs-/cap-/retract-/repl-),
+ * which are user memory, not rebuildable derived data. Old readers ignore
+ * unknown columns, so both directions stay compatible.
+ */
+function migrateAdditive(db) {
+  const cols = db.prepare('PRAGMA table_info(evidence_docs)').all().map((r) => r.name);
+  let altered = false;
+  if (!cols.includes('last_accessed')) {
+    db.exec('ALTER TABLE evidence_docs ADD COLUMN last_accessed TEXT;');
+    altered = true;
+  }
+  if (!cols.includes('importance')) {
+    db.exec('ALTER TABLE evidence_docs ADD COLUMN importance REAL NOT NULL DEFAULT 1;');
+    altered = true;
+  }
+  if (altered) {
+    // ALTER breaks the external-content FTS5 mirror for rows whose indexed
+    // shape changed; the documented repair is a full index rebuild.
+    db.exec("INSERT INTO evidence_fts(evidence_fts) VALUES('rebuild');");
+  }
 }

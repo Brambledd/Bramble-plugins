@@ -8,9 +8,20 @@
 // material — never as lessons (governance stays human-approved).
 
 import { redactSecrets } from '../../lessons/src/redactor.js';
+import { ingestMemory, overlapsEntry } from '../../core/src/ingest-service.js';
 
-/** Extract STRICT-JSON facts array from an LLM answer, tolerantly. */
-export function parseFacts(answer, maxFacts) {
+// Shared dedup rule: overlapsEntry lives in the unified ingest pipeline so
+// observe and capture can never drift apart. Re-exported for compatibility.
+export { overlapsEntry };
+
+/**
+ * Extract structured fact objects from an LLM answer, tolerantly.
+ * Accepts BOTH shapes (LongMemEval fact-augmentation fields):
+ *   {"facts": ["plain string", ...]}
+ *   {"facts": [{"text": "...", "date": "YYYY-MM-DD|null", "importance": 1-5}, ...]}
+ * Returns [{text, date, importance}] — strings map to {text, date:null, importance:1}.
+ */
+export function parseFactObjects(answer, maxFacts) {
   if (typeof answer !== 'string' || answer.length === 0) return [];
   let data = null;
   try {
@@ -30,39 +41,33 @@ export function parseFacts(answer, maxFacts) {
   const seen = new Set();
   const facts = [];
   for (const item of raw) {
-    if (typeof item !== 'string') continue;
-    const fact = item.trim();
+    let text;
+    let date = null;
+    let importance = 1;
+    if (typeof item === 'string') {
+      text = item;
+    } else if (item && typeof item === 'object' && typeof item.text === 'string') {
+      text = item.text;
+      if (typeof item.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(item.date)) date = item.date;
+      const imp = Number(item.importance);
+      if (Number.isFinite(imp) && imp >= 1) importance = Math.min(5, Math.round(imp));
+    } else {
+      continue;
+    }
+    const fact = text.trim();
     if (fact.length < 8 || fact.length > 240) continue;
     const key = fact.toLowerCase().replace(/\s+/g, ' ');
     if (seen.has(key)) continue;
     seen.add(key);
-    facts.push(fact);
+    facts.push({ text: fact, date, importance });
     if (facts.length >= maxFacts) break;
   }
   return facts;
 }
 
-const STOPWORDS = new Set([
-  'the', 'and', 'for', 'with', 'that', 'this', 'from', 'their', 'there',
-  'have', 'has', 'had', 'are', 'was', 'were', 'been', 'its', 'his', 'her',
-  'they', 'them', 'you', 'your', 'our', 'not', 'but', 'all', 'any',
-]);
-
-/** Lexical overlap ≥ half the fact's distinct content words found in the entry. */
-export function overlapsEntry(fact, entry) {
-  const words = [
-    ...new Set(
-      fact
-        .toLowerCase()
-        .split(/[^\p{L}\p{N}]+/u)
-        .filter((w) => w.length > 2 && !STOPWORDS.has(w)),
-    ),
-  ];
-  if (words.length === 0) return false;
-  const hay = `${entry.title ?? ''} ${entry.summary ?? ''}`.toLowerCase();
-  let hits = 0;
-  for (const w of words) if (hay.includes(w)) hits += 1;
-  return hits >= Math.max(1, Math.ceil(words.length / 2));
+/** Extract STRICT-JSON facts array from an LLM answer, tolerantly. */
+export function parseFacts(answer, maxFacts) {
+  return parseFactObjects(answer, maxFacts).map((f) => f.text);
 }
 
 /** True when the store already contains a near-duplicate of the fact. */
@@ -104,41 +109,40 @@ export function todayCapturedCount(store, now = new Date()) {
  */
 export async function runCapturePass(store, callLlm, { turnTexts, maxFacts, redact }) {
   const answer = await callLlm();
-  let facts = parseFacts(answer, maxFacts);
+  let factObjects = parseFactObjects(answer, maxFacts);
   let redactions = 0;
   if (redact) {
-    facts = facts.map((f) => {
-      const r = redactSecrets(f);
+    factObjects = factObjects.map((f) => {
+      const r = redactSecrets(f.text);
       redactions += r.redactions;
-      return r.text;
+      return { ...f, text: r.text };
     });
   }
   const seen = new Set();
   let written = 0;
   let skipped = 0;
   const kept = [];
-  const ts = Date.now();
-  for (const fact of facts) {
-    const key = fact.toLowerCase().replace(/\s+/g, ' ');
-    if (seen.has(key) || isDuplicate(store, fact)) {
+  for (const fact of factObjects) {
+    const key = fact.text.toLowerCase().replace(/\s+/g, ' ');
+    if (seen.has(key)) {
+      skipped += 1;
+      continue;
+    }
+    // Unified ingest pipeline: exact restatement -> noop, variant -> supersede
+    // (UPDATE), new fact -> add. Date token + importance ride along so the
+    // query-side temporal boost and bounded ranking factor have data.
+    const result = ingestMemory(store, {
+      text: fact.text,
+      source: 'capture',
+      date: fact.date,
+      importance: fact.importance,
+    });
+    if (result.error || result.decision === 'noop') {
       skipped += 1;
       continue;
     }
     seen.add(key);
-    const anchor = `cap-${ts}-${Math.random().toString(36).slice(2, 8)}`;
-    store.upsert({
-      anchor,
-      kind: 'note',
-      status: 'active',
-      authority: 'standard',
-      title: fact.slice(0, 120),
-      summary: fact,
-      keywords: fact.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1).slice(0, 20),
-      sourcePath: null,
-      revision: null,
-      supersededBy: null,
-    });
-    kept.push(fact);
+    kept.push(fact.text);
     written += 1;
   }
   return { written, skipped, facts: kept, redactions };
@@ -154,8 +158,10 @@ export function captureSystemPrompt(maxFacts) {
     'already covered by the known entries. Write each fact as ONE self-contained ' +
     "third-person statement (at most 200 characters) naming the user (e.g. " +
     "'The user is migrating their blog from WordPress to Astro'). " +
-    `Output STRICT JSON only: {"facts": ["..."]} — at most ${maxFacts} facts; ` +
-    'empty array when nothing durable appears.'
+    `Output STRICT JSON only: {"facts": [{"text": "...", "date": "YYYY-MM-DD or null", "importance": 1-5}]} — at most ${maxFacts} facts; ` +
+    '"date" is the calendar day the fact refers to when one is stated (else null); ' +
+    '"importance": 5 for identity/core preferences and standing decisions, 1 for trivia. ' +
+    'Empty array when nothing durable appears.'
   );
 }
 

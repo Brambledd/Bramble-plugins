@@ -107,6 +107,9 @@ export class LessonCandidateStore {
       `title: ${JSON.stringify(candidate.title)}`,
       'kind: lesson',
       'status: active',
+      // Human-approved distilled rules outrank raw notes in ranking
+      // (Generative Agents importance factor; bounded ×1.2 in the store).
+      'importance: 5',
       `summary: ${JSON.stringify(firstSentence(candidate.lesson))}`,
       'keywords: lesson, distilled',
       '---',
