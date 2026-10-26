@@ -9,6 +9,7 @@
 
 import { redactSecrets } from '../../lessons/src/redactor.js';
 import { ingestMemory, overlapsEntry } from '../../core/src/ingest-service.js';
+import { consolidateNotes } from '../../core/src/consolidation-service.js';
 
 // Shared dedup rule: overlapsEntry lives in the unified ingest pipeline so
 // observe and capture can never drift apart. Re-exported for compatibility.
@@ -145,7 +146,18 @@ export async function runCapturePass(store, callLlm, { turnTexts, maxFacts, reda
     kept.push(fact.text);
     written += 1;
   }
-  return { written, skipped, facts: kept, redactions };
+  // Condensation tail (sixth atomic op): a small bounded hygiene pass after
+  // each extraction — merge restatements the ingest top-3 window missed,
+  // archive stale untouched trivia. Budgets kept tiny: hygiene, not batch.
+  let consolidated = { scanned: 0, merged: [], archived: [] };
+  if (written > 0) {
+    try {
+      consolidated = consolidateNotes(store, { maxMerges: 2, maxArchive: 3 });
+    } catch {
+      // hygiene is best-effort; never fail the capture pass over it
+    }
+  }
+  return { written, skipped, facts: kept, redactions, consolidated };
 }
 
 /** Build the extraction system prompt. */

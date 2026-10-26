@@ -179,8 +179,11 @@ export function apply(ctx, config) {
         redact: cfg.redactSecrets,
       });
       buffer.length = 0;
+      const hygiene = result.consolidated
+        ? `, ${result.consolidated.merged.length} merged, ${result.consolidated.archived.length} archived`
+        : '';
       ctx.logger?.info?.(
-        `dsh-memory-capture: ${result.written} captured, ${result.skipped} duplicates, ${result.redactions} redactions (${turnTexts.length} turns)`,
+        `dsh-memory-capture: ${result.written} captured, ${result.skipped} duplicates, ${result.redactions} redactions${hygiene} (${turnTexts.length} turns)`,
       );
       return true;
     } catch (error) {
