@@ -1,43 +1,46 @@
-﻿{
-    "name":  "@brambledd/bramble-memory",
-    "version":  "0.5.0",
-    "description":  "Persistent memory plugin suite for DeepSeek Harness: cross-session evidence store, decision cues, lesson distillation, temporal events, targeted unlearning. Zero config, zero native dependencies.",
-    "type":  "module",
-    "license":  "MIT",
-    "repository":  {
-                       "type":  "git",
-                       "url":  "git+https://github.com/Brambledd/Bramble-plugins.git"
-                   },
-    "exports":  {
-                    "./plugins/core":  "./plugins/core/index.js",
-                    "./plugins/decisions":  "./plugins/decisions/index.js",
-                    "./plugins/lessons":  "./plugins/lessons/index.js",
-                    "./plugins/events":  "./plugins/events/index.js",
-                    "./plugins/capture":  "./plugins/capture/index.js",
-                    "./package.json":  "./package.json"
-                },
-    "files":  [
-                  "plugins",
-                  "cordis.patch.yml",
-                  "README.md"
-              ],
-    "peerDependencies":  {
-                             "@deepseek-ai/dsh-llm":  "\u003e=0.2.0-rc.2 \u003c0.3.0",
-                             "@deepseek-ai/schemastery":  "\u003e=3.18.5 \u003c4"
-                         },
-    "engines":  {
-                    "node":  "\u003e=22.5.0"
-                },
-    "keywords":  [
-                     "dsh",
-                     "deepseek-harness",
-                     "memory",
-                     "agent",
-                     "sqlite"
-                 ],
-    "dsh":  {
-                "bundle":  {
-                               "patch":  "./cordis.patch.yml"
-                           }
-            }
+{
+  "name": "@brambledd/bramble-memory",
+  "version": "0.5.1",
+  "description": "Persistent memory plugin suite for DeepSeek Harness: cross-session evidence store, decision cues, lesson distillation, temporal events, targeted unlearning. Zero config, zero native dependencies.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Brambledd/Bramble-plugins.git"
+  },
+  "exports": {
+    "./plugins/core": "./plugins/core/index.js",
+    "./plugins/decisions": "./plugins/decisions/index.js",
+    "./plugins/lessons": "./plugins/lessons/index.js",
+    "./plugins/events": "./plugins/events/index.js",
+    "./plugins/capture": "./plugins/capture/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "plugins",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2 <0.3.0",
+    "@deepseek-ai/schemastery": ">=3.18.5 <4"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "memory",
+    "agent",
+    "sqlite"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "prepack": "node ../../scripts/strip-bom.mjs"
+  }
 }
