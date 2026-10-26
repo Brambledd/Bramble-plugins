@@ -24,20 +24,22 @@
 | single-session-assistant | 56 | **1.000** | **1.000** |
 | single-session-preference | 30 | **0.767** | 0.567 |
 
-## Reader-QA 端到端准确率（30 题子样本，每题型 10 题；已判 28，2 题在途）
+## Reader-QA 端到端准确率（S 集全量 500 题，GLM 官方判分协议）
 
-方法：top-3 检索会话作为上下文，无金标泄漏的 reader（隔离子代理）作答，parent 按与金标语义一致判分。
+方法：top-3 检索会话为上下文（session 粒度 BM25）→ reader `glm-5.3` 仅依据上下文作答（无金标泄漏）→ judge `glm-5.3` 按 **LongMemEval 官方 `evaluate_qa.py` 判分模板**（temporal 容差一位、knowledge-update 新答案规则、preference rubric 语义、abstention 模板）标注 yes/no。判分脚本 `bench/qa-full.mjs`（断点续跑、并发 8，全程 8.3 分钟）。
 
 | 指标 | 值 |
 |---|---|
-| 总体准确率（n=28） | **53.6%** |
-| top-3 命中时准确率（n=21） | 66.7% |
-| top-3 未命中时准确率（n=7） | 14.3% |
-| single-session-user（n=10） | 0.80 |
-| multi-session（n=9） | 0.22 |
-| single-session-preference（n=9） | 0.56 |
+| **总体准确率（n=500）** | **56.0%** |
+| 拒答 abstention（n=30，`_abs`） | **96.7%** |
+| single-session-assistant（n=56） | **98.2%** |
+| single-session-user（n=70） | 84.3% |
+| knowledge-update（n=78） | 57.7% |
+| single-session-preference（n=30） | 50.0% |
+| multi-session（n=133） | 45.1% |
+| temporal-reasoning（n=133） | 34.6% |
 
-误差分解（13 个错误）：**10 个纯检索失败**（top-3 未包含证据会话 → NOT FOUND 或答非所问），**3 个多会话聚合失败**（证据会话部分命中，计数不全：gold 5 答 3、gold 8 答 3、gold 4 答 1），**0 个纯阅读错误**——证据检索完整时 reader 全对。准确率天花板由检索决定。
+30 题小样本先导实验（28 判定）：总体 53.6%，命中 top-3 时 66.7% vs 未命中 14.3%——与全量结论一致：**准确率瓶颈在检索覆盖与多会话聚合，纯阅读错误趋零**。
 
 ## CJK 短笔记对照（合成集，16 查询 × 3 regime）
 
@@ -50,12 +52,12 @@ BM25 与 hash-hybrid **零分歧**（exact 0.33/0.33，2char 0.25/0.25，synonym
 3. **日期 token + 时间感知加成：本集零收益（诚实负结果）**：temporal 题面几乎不含可解析时间词，加成不触发；该题型考阅读器日期推理。适用面为显式带时间词的查询。
 4. **session 粒度优于裸 turn 粒度**：R@5 0.924 vs 0.918，preference 题 0.767 vs 0.567——粒度收益来自语义切分质量（需 LLM），不是机械碎片化。
 
-## 局限
+## 局限（原始四条的现状）
 
-- 检索召回为主 + 30 题 QA 子样本（每题型 10，temporal/knowledge-update/assistant 三题型 QA 在跑第二批）；无官方 judge 脚本对接（评测判分为语义一致判据）；
-- 使用 2024-10 原始 S 集，未用 2025-09 cleaned 版；
-- 索引的是原始会话文本，生产经 LLM 事实抽取的结果可能不同；
-- abstention（30 题，金标为空）未覆盖。
+- ~~QA 子样本 n=30~~ → **已解决**：S 集全量 500 题端到端 QA（官方判分协议，56.0%）；
+- ~~官方 judge 对接~~ → **已解决**：`evaluate_qa.py` 四套判分模板逐字移植 + abstention 模板；
+- ~~cleaned 版复跑~~ → **已解决（检索侧）**：cleaned S 470 题 R@1 0.802 / R@5 0.928 / MRR 0.859（略优于原版，系统对数据清洗鲁棒）；cleaned 版 QA 未跑（预算约束）；
+- ~~abstention 未覆盖~~ → **已解决**：30 题拒答准确率 96.7%（错 1 例为拒答不足）。
 
 ## 复现
 

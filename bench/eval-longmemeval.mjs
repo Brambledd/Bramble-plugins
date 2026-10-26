@@ -30,14 +30,80 @@ function flag(name, fallback) {
 const MODE = flag('mode', 'session');
 const VECTOR = flag('vector', 'off') === 'on';
 const DATE_TOKENS = flag('date-tokens', 'on') === 'on';
+const EMBED_API = flag('embedder', 'off') === 'api'; // Zhipu embedding-3 real embeddings
+const EMBED_TRUNC = Number(flag('embed-trunc', '4000'));
 const LIMIT = Number(flag('limit', '500'));
-const DATASET = flag('data', 's'); // s | m | oracle
+const DATASET = flag('data', 's'); // s | m | s_cleaned | oracle
 const OUT = flag('out', null);
 
+// bemula .env (API credentials for the optional real-embedding backend)
+const ENV_RAW = EMBED_API ? readFileSync('E:/ClowderAI/bemula-benchmark/.env', 'utf8') : '';
+const ENV = {};
+if (EMBED_API) for (const line of ENV_RAW.split(/\r?\n/)) { const m = line.match(/^\s*([A-Z_]+)\s*=\s*(.+?)\s*$/); if (m) ENV[m[1]] = m[2]; }
+const API_BASE = EMBED_API ? ENV_RAW.match(/OPENAI_BASE_URL=(\S+)/)?.[1] : null;
+
+function apiEmbedder() {
+  const model = ENV.BEMULA_EMBED_MODEL ?? 'embedding-3';
+  return {
+    model,
+    async embed(texts) {
+      const out = new Array(texts.length);
+      // adaptive batching: Zhipu 1210 (param error) on over-long batches —
+      // halve recursively until the request is accepted
+      const send = async (batch, offset) => {
+        for (let attempt = 0; ; attempt += 1) {
+          try {
+            const res = await fetch(`${API_BASE}/embeddings`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', authorization: `Bearer ${ENV.OPENAI_API_KEY}` },
+              body: JSON.stringify({ model, input: batch }),
+              signal: AbortSignal.timeout(60_000),
+            });
+            if (!res.ok) {
+              const bodyText = await res.text().catch(() => '');
+              // oversized batch: split and retry each half
+              if (res.status === 400 && batch.length > 1) {
+                const mid = Math.floor(batch.length / 2);
+                await send(batch.slice(0, mid), offset);
+                await send(batch.slice(mid), offset + mid);
+                return;
+              }
+              throw new Error(`HTTP ${res.status}: ${bodyText.slice(0, 300)}`);
+            }
+            const body = await res.json();
+            for (const d of body.data.slice().sort((a, b) => a.index - b.index)) {
+              out[offset + d.index] = Float32Array.from(d.embedding);
+            }
+            return;
+          } catch (error) {
+            if (error.message.startsWith('HTTP 400') && batch.length > 1) {
+              const mid = Math.floor(batch.length / 2);
+              await send(batch.slice(0, mid), offset);
+              await send(batch.slice(mid), offset + mid);
+              return;
+            }
+            if (attempt >= 2) throw error;
+            await new Promise((r) => setTimeout(r, 1500 * 2 ** attempt));
+          }
+        }
+      };
+      for (let i = 0; i < texts.length; i += 16) {
+        const batch = texts.slice(i, i + 16).map((t) => t.slice(0, EMBED_TRUNC));
+        await send(batch, i);
+      }
+      return out.filter(Boolean);
+    },
+  };
+}
+
 // ---------------------------------------------------------------- data
+const DATA_FILES = { s: 'longmemeval_s.json', s_cleaned: 'longmemeval_s_cleaned.json', oracle: 'longmemeval_oracle.json' };
 const data = JSON.parse(
-  readFileSync(new URL(`./data/longmemeval_${DATASET}.json`, import.meta.url), 'utf8'),
-).slice(0, LIMIT);
+  readFileSync(new URL(`./data/${DATA_FILES[DATASET] ?? `longmemeval_${DATASET}.json`}`, import.meta.url), 'utf8'),
+)
+  // official retrieval protocol skips the 30 abstention instances (no gold location)
+  .filter((inst) => !inst.question_id.endsWith('_abs'))
+  .slice(0, LIMIT);
 
 // ---------------------------------------------------------------- helpers
 function sessionDateToken(raw) {
@@ -47,12 +113,13 @@ function sessionDateToken(raw) {
 }
 
 function indexSession(store, inst, idx, session) {
-  const anchor = `${inst.question_id}::${inst.haystack_session_ids[idx]}`;
-  const dateToken = sessionDateToken(inst.haystack_dates?.[idx]);
-  const keywords = [];
-  if (DATE_TOKENS && dateToken) keywords.push(dateToken);
   if (MODE === 'session') {
     const summary = session.map((t) => `${t.role}: ${t.content}`).join('\n');
+    if (!summary.trim()) return; // empty placeholder sessions: nothing to index
+    const anchor = `${inst.question_id}::${inst.haystack_session_ids[idx]}`;
+    const dateToken = sessionDateToken(inst.haystack_dates?.[idx]);
+    const keywords = [];
+    if (DATE_TOKENS && dateToken) keywords.push(dateToken);
     store.upsert({
       anchor, kind: 'note', status: 'active', authority: 'standard',
       title: `Session ${idx} (${dateToken ?? 'undated'})`, summary, keywords,
@@ -60,8 +127,13 @@ function indexSession(store, inst, idx, session) {
     });
   } else {
     // turn mode: one note per turn, session-scoped anchor prefix for recall
+    const anchor = `${inst.question_id}::${inst.haystack_session_ids[idx]}`;
+    const dateToken = sessionDateToken(inst.haystack_dates?.[idx]);
+    const keywords = [];
+    if (DATE_TOKENS && dateToken) keywords.push(dateToken);
     session.forEach((turn, t) => {
       const text = `${turn.role}: ${turn.content}`;
+      if (!text.trim()) return;
       store.upsert({
         anchor: `${anchor}::t${t}`, kind: 'note', status: 'active', authority: 'standard',
         title: `${turn.role} turn`, summary: text, keywords,
@@ -86,13 +158,16 @@ for (const inst of data) {
   if (VECTOR) {
     store.attachEmbedding(createEmbeddingBackend({ enabled: true, backend: 'hash' }));
   }
+  if (EMBED_API) {
+    store.attachEmbedding(apiEmbedder());
+  }
   inst.haystack_sessions.forEach((session, idx) => indexSession(store, inst, idx, session));
-  if (VECTOR) {
-    // mirror the plugin's startup backfill (production default gate 2000):
-    // without vector rows the lane is inert
+  if (VECTOR || EMBED_API) {
+    // mirror the plugin's startup backfill (gate 8000 for real embeddings —
+    // quality argument no longer applies, only the embedding-context cap)
     let guard = 0;
-    while (guard++ < 50) {
-      const { embedded } = await store.embedBackfill({ batchSize: 128, maxIndexedChars: 2000 });
+    while (guard++ < 80) {
+      const { embedded } = await store.embedBackfill({ batchSize: VECTOR ? 128 : 16, maxIndexedChars: EMBED_API ? 8000 : 2000 });
       if (embedded === 0) break;
     }
   }
