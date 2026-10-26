@@ -20,7 +20,7 @@
 //   consolidation passes do not re-derive them
 
 import { readFile, writeFile } from 'node:fs/promises';
-import { buildProbes } from './util.js';
+import { buildProbes, computeRevision } from './util.js';
 
 const FRESH_WRITE_GUARD_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -198,7 +198,7 @@ export async function executeForget(store, options) {
       summary: replacement.trim(),
       keywords: replacement.trim().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1).slice(0, 20),
       sourcePath: null,
-      revision: null,
+      revision: computeRevision(replacement.trim()), // hash dynamic truth (vector lane)
       supersededBy: null,
     });
     // The replacement is a positive new value: any active retraction marker

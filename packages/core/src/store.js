@@ -392,7 +392,7 @@ export class EvidenceStore {
       .prepare(
         `SELECT d.anchor, d.source_hash FROM evidence_docs d
          LEFT JOIN evidence_vectors v ON v.anchor = d.anchor AND v.revision = d.source_hash AND v.model = ?
-         WHERE v.anchor IS NULL`,
+         WHERE v.anchor IS NULL AND d.source_hash IS NOT NULL`,
       )
       .all(this.embedding.model)
       .slice(0, batchSize);

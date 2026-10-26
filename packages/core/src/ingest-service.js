@@ -16,6 +16,7 @@
 //   5. retraction supersession — relearning overrides active markers
 //      (forget-service helper; runs last because it needs the new anchor)
 import { supersedeRetractionsForText } from './forget-service.js';
+import { computeRevision } from './util.js';
 
 const STOPWORDS = new Set([
   'the', 'and', 'for', 'with', 'that', 'this', 'from', 'their', 'there',
@@ -111,7 +112,10 @@ export function ingestMemory(store, { text, tags = [], source = 'observe', date 
     summary: clean,
     keywords,
     sourcePath: null,
-    revision: null,
+    // Dynamic content is its own truth: hash it so the vector lane can stamp
+    // and freshness-check embeddings (a NULL revision silently killed the
+    // whole backfill lane — surfaced by the LongMemEval harness).
+    revision: computeRevision(clean),
     supersededBy: null,
     importance, // LLM-rated 1-5 (Generative Agents third factor); clamped in the store
   });
