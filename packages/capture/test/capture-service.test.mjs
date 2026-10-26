@@ -10,6 +10,7 @@ import {
   captureUserPrompt,
   isDuplicate,
   overlapsEntry,
+  parseFactObjects,
   parseFacts,
   runCapturePass,
   todayCapturedCount,
@@ -95,4 +96,43 @@ test('prompts: known entries + numbered turns', () => {
   const user = captureUserPrompt(['Known fact one'], ['turn text A', 'turn text B']);
   assert.match(user, /Known memory entries/);
   assert.match(user, /【turn 1】turn text A/);
+});
+
+test('parseFactObjects: structured facts with date + importance, string compat, clamps', () => {
+  const structured = JSON.stringify({
+    facts: [
+      { text: 'The user is moving to Penang this December', date: '2024-12-01', importance: 5 },
+      { text: 'The user likes cycling on weekends', importance: 99 },
+      { text: 'The user likes cycling on weekends' },
+      'plain string fact ok here',
+      { text: 'x' },
+    ],
+  });
+  const parsed = parseFactObjects(structured, 6);
+  assert.equal(parsed.length, 3, 'duplicate cycling fact and sub-length "x" dropped');
+  assert.deepEqual([parsed[0].date, parsed[0].importance], ['2024-12-01', 5]);
+  assert.equal(parsed[1].importance, 5, 'importance clamps to 5');
+  assert.equal(parsed[2].importance, 1);
+  assert.deepEqual([parsed[2].text, parsed[2].date, parsed[2].importance], ['plain string fact ok here', null, 1]);
+  assert.equal(parseFactObjects('{"facts": ["short"]}', 6).length, 0, 'length filter applies to structured path');
+  assert.deepEqual(parseFacts(structured, 6)[0], 'The user is moving to Penang this December');
+});
+
+test('runCapturePass: date and importance land in the stored row via ingest', async () => {
+  const { dir, store } = await tempStore();
+  try {
+    const answer = JSON.stringify({
+      facts: [{ text: 'The user is moving to Penang this December', date: '2024-12-01', importance: 5 }],
+    });
+    const result = await runCapturePass(store, async () => answer, { turnTexts: ['t'], maxFacts: 4, redact: false });
+    assert.equal(result.written, 1);
+    const anchors = store.db.prepare("SELECT anchor FROM evidence_docs WHERE anchor LIKE 'cap-%'").all();
+    assert.equal(anchors.length, 1);
+    const row = store.getByAnchor(anchors[0].anchor);
+    assert.ok(row.keywords.includes('2024-12-01'), 'date token indexed by ingest');
+    assert.equal(row.importance, 5, 'importance stored through ingest');
+  } finally {
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });

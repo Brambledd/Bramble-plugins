@@ -1,0 +1,61 @@
+{
+ "config": {
+  "dataset": "s",
+  "mode": "turn",
+  "vector": false,
+  "dateTokens": false,
+  "limit": 500
+ },
+ "elapsedMs": 77588,
+ "overall": {
+  "n": 500,
+  "recallAt1": 0.782,
+  "recallAt3": 0.886,
+  "recallAt5": 0.918,
+  "mrr": 0.839
+ },
+ "perType": {
+  "knowledge-update": {
+   "n": 78,
+   "recallAt1": 0.923,
+   "recallAt3": 0.974,
+   "recallAt5": 0.987,
+   "mrr": 0.949
+  },
+  "multi-session": {
+   "n": 133,
+   "recallAt1": 0.782,
+   "recallAt3": 0.902,
+   "recallAt5": 0.932,
+   "mrr": 0.848
+  },
+  "single-session-assistant": {
+   "n": 56,
+   "recallAt1": 0.982,
+   "recallAt3": 1,
+   "recallAt5": 1,
+   "mrr": 0.991
+  },
+  "single-session-preference": {
+   "n": 30,
+   "recallAt1": 0.267,
+   "recallAt3": 0.433,
+   "recallAt5": 0.567,
+   "mrr": 0.382
+  },
+  "single-session-user": {
+   "n": 70,
+   "recallAt1": 0.786,
+   "recallAt3": 0.9,
+   "recallAt5": 0.957,
+   "mrr": 0.851
+  },
+  "temporal-reasoning": {
+   "n": 133,
+   "recallAt1": 0.729,
+   "recallAt3": 0.865,
+   "recallAt5": 0.887,
+   "mrr": 0.799
+  }
+ }
+}

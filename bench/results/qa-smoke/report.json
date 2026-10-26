@@ -1,0 +1,19 @@
+{
+ "config": {
+  "dataset": "s",
+  "n": 5,
+  "reader": "glm-5.3",
+  "judge": "glm-5.3",
+  "topk": 3,
+  "trunc": 12000,
+  "elapsedMin": 0.1
+ },
+ "accuracy": 0.6,
+ "abstention": null,
+ "perType": {
+  "single-session-user": {
+   "n": 5,
+   "accuracy": 0.6
+  }
+ }
+}

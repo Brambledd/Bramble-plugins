@@ -111,3 +111,99 @@ export function renderCueLine(candidates) {
     'If relevant, call memory_drill with the anchor and revision above for the full accepted record.',
   ].join('\n');
 }
+
+// ------------------------------------------------------- preference cues
+//
+// PrefEval (ICLR 2025) finding: models store preferences but fail to APPLY
+// them proactively — a plain Reminder beats CoT/Self-Critic. So preferences
+// rotate: each entry may re-surface once per UTC day (ledger revision key is
+// day-scoped), inside a family quota, under a global cross-family ceiling
+// shared with decision cues.
+
+const PREF_FAMILY = 'preference';
+
+/** Count preference cues presented today (UTC). */
+export function preferencePresentedToday(store, owner = 'default') {
+  const dayPrefix = new Date().toISOString().slice(0, 10);
+  return store.db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM cue_episodes
+       WHERE owner = ? AND family = ? AND recorded_at >= ?`,
+    )
+    .get(owner, PREF_FAMILY, `${dayPrefix}T00:00:00`).n;
+}
+
+/** Count ALL cue families presented today (UTC) — the shared ceiling meter. */
+export function globalPresentedToday(store, owner = 'default') {
+  const dayPrefix = new Date().toISOString().slice(0, 10);
+  return store.db
+    .prepare('SELECT COUNT(*) AS n FROM cue_episodes WHERE owner = ? AND recorded_at >= ?')
+    .get(owner, `${dayPrefix}T00:00:00`).n;
+}
+
+function isPreferenceEntry(item) {
+  const keywords = (item.keywords ?? []).map((k) => String(k).toLowerCase());
+  return (
+    item.kind === 'note' &&
+    item.status === 'active' &&
+    !item.supersededBy &&
+    (keywords.includes('preference') || keywords.includes('preferences'))
+  );
+}
+
+/**
+ * Select preference cues relevant to the turn: active notes tagged
+ * "preference" that (a) match the turn text, (b) have not surfaced today
+ * (day-scoped ledger revision key enables daily rotation), (c) fit the
+ * family quota AND the global remaining budget.
+ */
+export function evaluatePreferenceCues(store, { owner = 'default', turnText, perTurnMax = 1, dailyQuota = 3, globalRemaining = Number.POSITIVE_INFINITY }) {
+  if (!turnText || turnText.length < 4) {
+    return { candidates: [], cueLine: null, suppressedByBudget: 0 };
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const { items } = store.search({ query: turnText, kinds: ['note'], limit: 20 });
+  const candidates = [];
+  let suppressedByBudget = 0;
+  const quotaRoom = Math.max(0, dailyQuota - preferencePresentedToday(store, owner));
+  const globalRoom = Math.max(0, Math.floor(globalRemaining));
+  for (const item of items) {
+    if (!isPreferenceEntry(item)) continue;
+    if (store.hasConsumedRevision({ owner, family: PREF_FAMILY, sourceAnchor: item.anchor, sourceRevision: `day-${today}` })) {
+      continue; // already surfaced today — rotates back tomorrow
+    }
+    if (candidates.length >= perTurnMax || candidates.length >= quotaRoom || candidates.length >= globalRoom) {
+      suppressedByBudget += 1;
+      continue;
+    }
+    candidates.push(item);
+  }
+  const cueLine = renderPreferenceCueLine(candidates);
+  return { candidates, cueLine, suppressedByBudget };
+}
+
+/** Record terminal consumption with a DAY-scoped revision key (rotation). */
+export function recordPreferencePresented(store, { owner = 'default' }, candidates) {
+  const dayKey = `day-${new Date().toISOString().slice(0, 10)}`;
+  for (const item of candidates) {
+    store.recordCueConsumption({
+      owner,
+      family: PREF_FAMILY,
+      sourceAnchor: item.anchor,
+      sourceRevision: dayKey,
+      terminal: 'presented',
+    });
+  }
+}
+
+/** Render the preference reminder (PrefEval "Reminder" baseline style). */
+export function renderPreferenceCueLine(candidates) {
+  if (candidates.length === 0) return null;
+  const lines = candidates.map(
+    (item) => `- preference cue: "${item.title}"${item.summary ? ` — ${item.summary}` : ''}`,
+  );
+  return [
+    'Standing user preference(s) from memory — apply proactively where relevant:',
+    ...lines,
+  ].join('\n');
+}

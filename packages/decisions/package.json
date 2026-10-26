@@ -1,34 +1,37 @@
 {
-    "name":  "@local/dsh-memory-decisions",
-    "version":  "0.1.0",
-    "description":  "DSH memory plugin M2: decision cues 鈥?accepted decisions surface once at judgment points (per-turn injection), retire on supersede, budgeted.",
-    "type":  "module",
-    "main":  "index.js",
-    "exports":  {
-                    ".":  "./index.js",
-                    "./cue-service":  "./src/cue-service.js",
-                    "./package.json":  "./package.json"
-                },
-    "files":  [
-                  "index.js",
-                  "src",
-                  "README.md"
-              ],
-    "scripts":  {
-                    "check":  "node --check index.js \u0026\u0026 node --check src/cue-service.js",
-                    "test":  "node --test test/cue-service.test.mjs test/plugin.test.mjs"
-                },
-    "engines":  {
-                    "node":  "\u003e=22.5.0"
-                },
-    "dsh":  {
-                "bundle":  {
-                               "patch":  "./cordis.patch.yml"
-                           }
-            },
-    "license":  "MIT",
-    "peerDependencies":  {
-                             "@deepseek-ai/dsh-llm":  "\u003e=0.2.0-rc.2 \u003c0.3.0",
-                             "@deepseek-ai/schemastery":  "\u003e=3.18.5 \u003c4"
-                         }
+    "name": "@local/dsh-memory-decisions",
+    "version": "0.1.0",
+    "description": "DSH memory plugin M2: decision cues 鈥?accepted decisions surface once at judgment points (per-turn injection), retire on supersede, budgeted.",
+    "type": "module",
+    "main": "index.js",
+    "exports": {
+        ".": "./index.js",
+        "./cue-service": "./src/cue-service.js",
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "index.js",
+        "src",
+        "README.md"
+    ],
+    "scripts": {
+        "check": "node --check index.js && node --check src/cue-service.js",
+        "test": "node --test test/cue-service.test.mjs test/plugin.test.mjs"
+    },
+    "engines": {
+        "node": ">=22.5.0"
+    },
+    "dsh": {
+        "bundle": {
+            "patch": "./cordis.patch.yml"
+        }
+    },
+    "license": "MIT",
+    "peerDependencies": {
+        "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2 <0.3.0",
+        "@deepseek-ai/schemastery": ">=3.18.5 <4"
+    },
+    "devDependencies": {
+        "@deepseek-ai/schemastery": "^3.18.5"
+    }
 }

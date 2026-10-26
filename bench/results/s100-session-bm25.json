@@ -1,0 +1,33 @@
+{
+ "config": {
+  "dataset": "s",
+  "mode": "session",
+  "vector": false,
+  "dateTokens": true,
+  "limit": 100
+ },
+ "elapsedMs": 6560,
+ "overall": {
+  "n": 100,
+  "recallAt1": 0.77,
+  "recallAt3": 0.9,
+  "recallAt5": 0.92,
+  "mrr": 0.843
+ },
+ "perType": {
+  "multi-session": {
+   "n": 36,
+   "recallAt1": 0.778,
+   "recallAt3": 0.917,
+   "recallAt5": 0.917,
+   "mrr": 0.842
+  },
+  "single-session-user": {
+   "n": 64,
+   "recallAt1": 0.766,
+   "recallAt3": 0.891,
+   "recallAt5": 0.922,
+   "mrr": 0.844
+  }
+ }
+}

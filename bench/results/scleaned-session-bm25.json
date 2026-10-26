@@ -1,0 +1,61 @@
+{
+ "config": {
+  "dataset": "s_cleaned",
+  "mode": "session",
+  "vector": false,
+  "dateTokens": true,
+  "limit": 470
+ },
+ "elapsedMs": 30979,
+ "overall": {
+  "n": 470,
+  "recallAt1": 0.802,
+  "recallAt3": 0.909,
+  "recallAt5": 0.928,
+  "mrr": 0.859
+ },
+ "perType": {
+  "knowledge-update": {
+   "n": 72,
+   "recallAt1": 0.903,
+   "recallAt3": 0.958,
+   "recallAt5": 0.958,
+   "mrr": 0.926
+  },
+  "multi-session": {
+   "n": 121,
+   "recallAt1": 0.81,
+   "recallAt3": 0.942,
+   "recallAt5": 0.959,
+   "mrr": 0.876
+  },
+  "single-session-assistant": {
+   "n": 56,
+   "recallAt1": 0.964,
+   "recallAt3": 0.982,
+   "recallAt5": 1,
+   "mrr": 0.977
+  },
+  "single-session-preference": {
+   "n": 30,
+   "recallAt1": 0.5,
+   "recallAt3": 0.7,
+   "recallAt5": 0.767,
+   "mrr": 0.615
+  },
+  "single-session-user": {
+   "n": 64,
+   "recallAt1": 0.797,
+   "recallAt3": 0.922,
+   "recallAt5": 0.938,
+   "mrr": 0.868
+  },
+  "temporal-reasoning": {
+   "n": 127,
+   "recallAt1": 0.74,
+   "recallAt3": 0.858,
+   "recallAt5": 0.882,
+   "mrr": 0.806
+  }
+ }
+}

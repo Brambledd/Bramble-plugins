@@ -9,6 +9,10 @@ import { EvidenceStore } from '@local/dsh-memory-core/store';
 import { indexRoot } from '@local/dsh-memory-core/scanner';
 import {
   createDecisionCueService,
+  evaluatePreferenceCues,
+  globalPresentedToday,
+  preferencePresentedToday,
+  recordPreferencePresented,
   renderCueLine,
   userTextOfTurn,
 } from '../src/cue-service.js';
@@ -133,4 +137,75 @@ test('renderCueLine and userTextOfTurn shapes', () => {
   const user = { source: { kind: 'user' }, content: [{ type: 'text', text: 'real question' }] };
   assert.equal(userTextOfTurn([own, user], 'dsh-memory-decisions'), 'real question');
   assert.equal(userTextOfTurn(undefined, 'dsh-memory-decisions'), '');
+});
+
+// ------------------------------------------------------------ preference cues
+
+function prefNote(store, anchor, text) {
+  store.upsert({
+    anchor,
+    kind: 'note',
+    status: 'active',
+    authority: 'standard',
+    title: text.slice(0, 120),
+    summary: text,
+    keywords: [...text.split(/\s+/).filter(Boolean), 'preference'],
+    sourcePath: null,
+    revision: null,
+    supersededBy: null,
+  });
+}
+
+test('preference cues: selected by tag+topic, rotate daily, respect quotas', async () => {
+  const ws = await tempWorkspace();
+  try {
+    prefNote(ws.store, 'obs-pref-jazz', 'The user dislikes jazz venues when traveling');
+    const turn = 'Any recommendations for places to visit in New Orleans?';
+    const args = { owner: 'default', turnText: turn, perTurnMax: 1, dailyQuota: 3 };
+
+    const first = evaluatePreferenceCues(ws.store, args);
+    assert.equal(first.candidates.length, 1, 'tagged preference matches the turn');
+    assert.match(first.cueLine, /jazz/);
+    assert.match(first.cueLine, /apply proactively/i);
+    recordPreferencePresented(ws.store, { owner: 'default' }, first.candidates);
+
+    const second = evaluatePreferenceCues(ws.store, args);
+    assert.equal(second.candidates.length, 0, 'same-day repeat is silent (day-scoped rotation key)');
+    assert.equal(preferencePresentedToday(ws.store), 1);
+
+    // untagged notes never surface as preferences
+    ws.store.upsert({
+      anchor: 'obs-plain', kind: 'note', status: 'active', authority: 'standard',
+      title: 'plain', summary: 'The user dislikes jazz venues when traveling in winter',
+      keywords: ['user', 'dislikes', 'jazz'], sourcePath: null, revision: null, supersededBy: null,
+    });
+    const third = evaluatePreferenceCues(ws.store, args);
+    assert.ok(third.candidates.every((c) => c.anchor !== 'obs-plain'), 'untagged note is not a preference cue');
+  } finally {
+    ws.store.close();
+    await rm(ws.dir, { recursive: true, force: true });
+  }
+});
+
+test('preference cues: family quota and the global cross-family ceiling', async () => {
+  const ws = await tempWorkspace();
+  try {
+    prefNote(ws.store, 'obs-pref-1', 'The user dislikes jazz venues when traveling');
+    const turn = 'Any recommendations for places to visit in New Orleans?';
+    // family quota exhausted
+    const quotaBlock = evaluatePreferenceCues(ws.store, {
+      owner: 'default', turnText: turn, perTurnMax: 1, dailyQuota: 0,
+    });
+    assert.equal(quotaBlock.candidates.length, 0, 'prefDailyQuota=0 disables preference cues');
+    // global ceiling exhausted (decisions consumed the whole shared budget)
+    const globalBlock = evaluatePreferenceCues(ws.store, {
+      owner: 'default', turnText: turn, perTurnMax: 1, dailyQuota: 3, globalRemaining: 0,
+    });
+    assert.equal(globalBlock.candidates.length, 0, 'exhausted global ceiling blocks preference cues');
+    // global counter sees both families
+    assert.equal(globalPresentedToday(ws.store), 0);
+  } finally {
+    ws.store.close();
+    await rm(ws.dir, { recursive: true, force: true });
+  }
 });

@@ -94,6 +94,13 @@ export async function indexRoot(store, rootDir, { kindHint = null } = {}) {
     }
     const kind = inferKind({ relativePath, frontmatter, kindHint });
     const anchor = deriveAnchor({ frontmatter, relativePath, revision });
+    // Frontmatter importance 1-5 (Generative Agents rating); lessons
+    // materialize with 5, everything else defaults to 1.
+    const importanceNum = Number(frontmatter.importance);
+    const importance =
+      Number.isFinite(importanceNum) && importanceNum >= 1
+        ? Math.min(5, Math.round(importanceNum))
+        : 1;
     const item = {
       anchor,
       kind,
@@ -105,6 +112,7 @@ export async function indexRoot(store, rootDir, { kindHint = null } = {}) {
       sourcePath: filePath,
       revision,
       supersededBy: null,
+      importance,
     };
     const result = store.upsert(item);
     if (result.updated) updated += 1;
