@@ -52,6 +52,15 @@ BM25 与 hash-hybrid **零分歧**（exact 0.33/0.33，2char 0.25/0.25，synonym
 3. **日期 token + 时间感知加成：本集零收益（诚实负结果）**：temporal 题面几乎不含可解析时间词，加成不触发；该题型考阅读器日期推理。适用面为显式带时间词的查询。
 4. **session 粒度优于裸 turn 粒度**：R@5 0.924 vs 0.918，preference 题 0.767 vs 0.567——粒度收益来自语义切分质量（需 LLM），不是机械碎片化。
 
+## 评测外记录：v0.5.0 发布事故与修复（BOM）
+
+0.5.0 的发布流程暴露了两个与评测无关但影响分发的缺陷，均已在 0.5.1 修复：
+
+1. **外壳 manifest 带 UTF-8 BOM**（版本号经 PowerShell `Set-Content -Encoding utf8` 写入所致）。npm 工具链宽容，但 DSH 插件安装走 **pnpm，严格 JSON 解析会拒绝**——其他用户 `dsh plugin add` 可能直接失败。修复：`scripts/strip-bom.mjs` 扫描剥离，并挂载为外壳包 `prepack` 生命周期钩子，`npm pack/publish` 时自愈。0.5.1 tarball 已验证 shell/core/capture 三处 manifest 全净，并经 pnpm registry 安装模拟（临时目录、`^0.5.1` 范围）确认五插件与 overlay 完整解析。
+2. **build.ps1 同步列表漏 capture**：0.4.0 tarball 实际含 capture（exports 也声明），但构建脚本从未同步它——0.5.0 若不修会静默丢失第五个插件。已修并入库。
+
+3. 本地 web profile 切换另暴露两个单包分发缺陷（capture 无 overlay 文件、各包 `files` 白名单漏 cordis.patch.yml → DSH 校验 ENOENT 拒装），同批修复。
+
 ## 局限（原始四条的现状）
 
 - ~~QA 子样本 n=30~~ → **已解决**：S 集全量 500 题端到端 QA（官方判分协议，56.0%）；
