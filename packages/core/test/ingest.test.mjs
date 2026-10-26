@@ -290,3 +290,36 @@ test('additive migration: pre-column database gains columns without losing rows'
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('vector lane length gate: long summaries excluded from backfill, short included', async () => {
+  const { dir, store } = await tempStore();
+  try {
+    const { createEmbeddingBackend } = await import('../src/embedding.js');
+    store.attachEmbedding(createEmbeddingBackend({ enabled: true, backend: 'hash' }));
+    const shortText = 'The user prefers window seats on every flight they take';
+    const longText = 'The user described a very long trip itinerary. '.repeat(80); // ~3.8KB
+    note(store, 'short-1', shortText, [], new Date().toISOString());
+    note(store, 'long-1', longText, [], new Date().toISOString());
+    store.db.prepare('UPDATE evidence_docs SET source_hash = ? WHERE anchor IN (?, ?)')
+      .run('a'.repeat(64), 'short-1', 'long-1');
+    // production default gate: 2000 chars
+    let embedded = 0;
+    for (let i = 0; i < 5; i += 1) {
+      const r = await store.embedBackfill({ batchSize: 16, maxIndexedChars: 2000 });
+      embedded += r.embedded;
+      if (r.embedded === 0) break;
+    }
+    assert.equal(embedded, 1, 'only the short document enters the vector lane');
+    assert.ok(store.vectors.freshFor('short-1', 'a'.repeat(64)), 'short doc vector stored');
+    assert.equal(store.vectors.freshFor('long-1', 'a'.repeat(64)), null, 'long doc excluded by the gate');
+    // gate disabled: both enter
+    for (let i = 0; i < 5; i += 1) {
+      const r = await store.embedBackfill({ batchSize: 16, maxIndexedChars: 0 });
+      if (r.embedded === 0) break;
+    }
+    assert.ok(store.vectors.freshFor('long-1', 'a'.repeat(64)), 'gate 0 disables the length filter');
+  } finally {
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

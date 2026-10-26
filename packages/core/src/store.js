@@ -386,15 +386,21 @@ export class EvidenceStore {
    * startup jobs or lazily after searches.
    * @returns {Promise<{embedded: number, model: string}>}
    */
-  async embedBackfill({ batchSize = 16 } = {}) {
+  async embedBackfill({ batchSize = 16, maxIndexedChars = 0 } = {}) {
     if (!this.embedding) return { embedded: 0, model: null };
+    // Length gate (LongMemEval-S finding): random-projection embeddings of
+    // multi-KB texts are noise, and fusing them poisons calibrated BM25
+    // ranking. Documents above maxIndexedChars are excluded from the vector
+    // lane entirely (BM25 remains their only lane); 0 disables the gate.
+    const gate = Number.isFinite(maxIndexedChars) && maxIndexedChars > 0;
     const rows = this.db
       .prepare(
         `SELECT d.anchor, d.source_hash FROM evidence_docs d
          LEFT JOIN evidence_vectors v ON v.anchor = d.anchor AND v.revision = d.source_hash AND v.model = ?
-         WHERE v.anchor IS NULL AND d.source_hash IS NOT NULL`,
+         WHERE v.anchor IS NULL AND d.source_hash IS NOT NULL
+         ${gate ? 'AND length(COALESCE(d.summary, \'\')) <= ?' : ''}`,
       )
-      .all(this.embedding.model)
+      .all(...(gate ? [this.embedding.model, maxIndexedChars] : [this.embedding.model]))
       .slice(0, batchSize);
     if (rows.length === 0) return { embedded: 0, model: this.embedding.model };
     const texts = [];
@@ -655,10 +661,13 @@ function escapeLike(term) {
  * order. Every lane contributes weight/(K + rank) per item it contains;
  * K=60 is the standard RRF constant. CJK queries boost the vector lane by
  * ×1.5 (Clowder CJK_NN_WEIGHT rationale). Items hit by only one lane keep
- * that lane's contribution — vec-only hits are the cross-vocabulary wins.
- * @returns {{item: EvidenceItem, score: number}[]} sorted by score desc
+ * that lane's contribution — with one guard: VEC-ONLY hits carry a penalty
+ * (default ×0.5, LongMemEval-S finding) because an unconfirmed vector match
+ * must not outrank lexically-confirmed evidence for the top slots; dual-lane
+ * hits keep full weight (confirmation is the strongest signal). @returns
+ * {{item: EvidenceItem, score: number}[]} sorted by score desc
  */
-export function rrfFuse(ftsItems, vecItems, { cjkBoost = false, k = 60 } = {}) {
+export function rrfFuse(ftsItems, vecItems, { cjkBoost = false, k = 60, vecOnlyFactor = 0.5 } = {}) {
   const vecWeight = cjkBoost ? 1.5 : 1;
   const byAnchor = new Map();
   ftsItems.forEach((item, rank) => {
@@ -668,9 +677,9 @@ export function rrfFuse(ftsItems, vecItems, { cjkBoost = false, k = 60 } = {}) {
     const existing = byAnchor.get(item.anchor);
     const contribution = vecWeight / (k + rank);
     if (existing) {
-      existing.score += contribution;
+      existing.score += contribution; // dual-lane confirmation: full weight
     } else {
-      byAnchor.set(item.anchor, { item, score: contribution });
+      byAnchor.set(item.anchor, { item, score: contribution * vecOnlyFactor });
     }
   });
   const list = [...byAnchor.values()];

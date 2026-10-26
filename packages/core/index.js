@@ -39,13 +39,14 @@ export const Config = z.object({
   reindexOnStart: z.boolean().description('Rescan configured roots at startup.'),
   promptHint: z.boolean().description('Inject the one-line memory-availability system prompt hint.'),
   vector: z.object({
-    enabled: z.boolean().description('Enable the vector lane (hybrid RRF search).'),
+    enabled: z.boolean().description('Enable the vector lane (hybrid RRF search). OPT-IN since the LongMemEval-S benchmark: the hash backend measurably poisoned long-text retrieval (R@5 0.924 -> 0.614); enable deliberately for short-CJK-note profiles or a real embedding backend.'),
     backend: z.string().description("Embedding backend: 'hash' (default, deterministic, offline) or 'openai' (OpenAI-compatible endpoint)."),
     baseUrl: z.string().description('openai backend: base URL of the embeddings endpoint.'),
     apiKeyEnv: z.string().description('openai backend: environment variable holding the API key.'),
     model: z.string().description('openai backend: embedding model id.'),
     dimensions: z.number().description('Vector dimensions (hash backend default 256).'),
     backfillBatch: z.number().description('How many documents to embed per startup backfill batch.'),
+    maxIndexedChars: z.number().description('Exclude documents with summaries longer than this from the vector lane (hash/random-projection embeddings of long texts are noise and poison fused ranking; 0 disables the gate). Default 2000.'),
   }).description('Vector lane configuration.'),
 });
 
@@ -64,8 +65,13 @@ function resolveConfig(config) {
   const rawVector = typeof cfg.vector === 'object' && cfg.vector !== null ? cfg.vector : {};
   const vector = {
     ...rawVector,
-    enabled: rawVector.enabled !== false,
+    // OPT-IN since the LongMemEval-S benchmark: the hash/random-projection
+    // lane measurably poisoned long-text retrieval (R@5 0.924 -> 0.614) and
+    // carries a history of silent backfill failure. BM25+probes is the best
+    // measured default; enable the lane deliberately for short-CJK profiles.
+    enabled: rawVector.enabled === true,
     backfillBatch: clampInt(rawVector.backfillBatch, 0, 512, 64),
+    maxIndexedChars: clampInt(rawVector.maxIndexedChars, 0, 1_000_000, 2000),
   };
   return {
     dbPath,
@@ -149,7 +155,7 @@ export function apply(ctx, config) {
       let budget = cfg.vector.backfillBatch;
       while (budget > 0) {
         const result = await store
-          .embedBackfill({ batchSize: Math.min(32, budget) })
+          .embedBackfill({ batchSize: Math.min(32, budget), maxIndexedChars: cfg.vector.maxIndexedChars })
           .catch((error) => {
             ctx.logger?.warn?.(`memory-core: vector backfill failed: ${error.message}`);
             return { embedded: 0 };

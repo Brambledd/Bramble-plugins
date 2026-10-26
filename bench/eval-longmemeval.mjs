@@ -88,10 +88,11 @@ for (const inst of data) {
   }
   inst.haystack_sessions.forEach((session, idx) => indexSession(store, inst, idx, session));
   if (VECTOR) {
-    // mirror the plugin's startup backfill: without vector rows the lane is inert
+    // mirror the plugin's startup backfill (production default gate 2000):
+    // without vector rows the lane is inert
     let guard = 0;
     while (guard++ < 50) {
-      const { embedded } = await store.embedBackfill({ batchSize: 128 });
+      const { embedded } = await store.embedBackfill({ batchSize: 128, maxIndexedChars: 2000 });
       if (embedded === 0) break;
     }
   }
